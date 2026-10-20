@@ -71,7 +71,8 @@ def _menu(agent):
 
     from . import COMMANDS
     prefix = agent.backend.prefix
-    wanted = [f"{prefix}_{suffix}" if suffix else prefix for suffix, _d, _h in COMMANDS]
+    # Hermes keeps commands with a required argument (<question>) out of the menu: a tap would send none.
+    wanted = [f"{prefix}_{suffix}" if suffix else prefix for suffix, _d, hint in COMMANDS if not hint.startswith("<")]
     menu, _hidden = telegram_menu_commands(max_commands=telegram_menu_max_commands())
     missing = [c for c in wanted if c not in {name for name, _ in menu}]
     if missing:
