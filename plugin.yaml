@@ -106,6 +106,12 @@ config_schema:
     description: >
       File holding DEEPSEEK_API_KEY=… (mode 600), a key of its own for opencode: it reaches
       opencode through its environment, never its config. Without it, /oc runs nothing.
+  presets:
+    type: dict
+    default: {}
+    description: >
+      Optional settings of the presets (/<name>, prompts saved with /preset):
+      {name: {backend: opencode | agy | claude, banner: "…", description: "…"}}. Default backend: opencode.
   machine_notes:
     type: str
     default: ""

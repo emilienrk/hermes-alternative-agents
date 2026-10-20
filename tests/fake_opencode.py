@@ -68,7 +68,7 @@ def main():
     emit("step_finish", {"type": "step-finish", "reason": "tool-calls", "tokens": tokens, "cost": 0.0002})
     emit("step_start", {"type": "step-start"})
     emit("text", {"type": "text", "text": f"Voir [main.py](file://{Path.home()}/main.py)."})
-    emit("text", {"type": "text", "text": f"ECHO:{prompt[-200:]}"})
+    emit("text", {"type": "text", "text": "OK" if mode == "quiet" else f"ECHO:{prompt[-200:]}"})
     emit("step_finish", {"type": "step-finish", "reason": "stop", "tokens": tokens, "cost": 0.0003})
 
 

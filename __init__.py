@@ -7,6 +7,8 @@ for opencode:
                      banner; one mode at a time); slash commands and messages starting with
                      "Hermes" still go to Hermes, /stop and /new act on the agent
   /agy <message>     the explicit form (/cc <message>)
+  /<preset>          a new conversation whose first message is a saved prompt (presets.py), then that
+                     agent's mode; /preset lists, saves (in reply to a message) and removes presets
 Photos, files and voice notes ride along; voice notes are transcribed locally first when the
 agent can't hear them.
 
@@ -27,7 +29,7 @@ from functools import partial
 from itertools import zip_longest
 from pathlib import Path
 
-from . import backends, config, engine, workspace
+from . import backends, config, engine, presets, workspace
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,19 @@ def register(ctx):
             handler = globals()[f"_cmd_{suffix or 'status'}"]
             ctx.register_command(name, handler=partial(handler, agent), args_hint=hint,
                                  description=description.format(label=agent.label, product=agent.backend.product))
+    own = _own_commands()
+    for name in presets.names():
+        problem = presets.name_problem(name, own)
+        if problem:
+            logger.warning("alternative-agents: preset /%s not registered: %s", name, problem)
+            continue
+        setting = presets.settings(name)
+        agent = engine.AGENTS.get(setting["backend"])
+        ctx.register_command(name, handler=partial(_cmd_run_preset, name),
+                             description=setting["description"] or f"New {agent.label if agent else '?'} "
+                                                                   f"conversation opened by the /{name} preset")
+    ctx.register_command("preset", handler=_cmd_preset, args_hint="[name | rm name]",
+                         description="Saved prompts opening a conversation (/preset <name> in reply to one)")
     ctx.register_hook("pre_gateway_dispatch", _on_dispatch)
     ctx.register_telegram_handler(_on_telegram_connect)
 
@@ -135,6 +150,10 @@ def route(event, states):
                 return "btw", agent, _job(event, rest, media, True, new=True, side=True)
             if name in (f"{prefix}-handoff", f"{prefix}-back"):
                 return name[len(prefix) + 1:], agent, rest.strip()
+        if name == "preset":
+            return "presets", None, (rest.strip(), getattr(event, "reply_to_text", None) or "")
+        if name in config.cfg["presets"] or name in presets.names():
+            return "preset", None, name
         if sticky and name == "stop" and sticky.busy():
             return "stop", sticky, None
         if sticky and name == "new":
@@ -200,7 +219,27 @@ async def _act(decision, event):
         await agent.send(_stop_text(agent), reply_to=event.message_id)
     elif kind == "new":
         agent.store.update(conversation_id=None)
+        await agent.end_preset()
         await agent.send(f"🆕 New {agent.label} conversation from the next message.", reply_to=event.message_id)
+    elif kind == "preset":
+        await _say(await _run_preset(payload, event.message_id), event.message_id)
+    elif kind == "presets":
+        args, reply_text = payload
+        await _say(await asyncio.to_thread(_manage_presets, args, reply_text), event.message_id)
+
+
+async def _say(text, reply_to=None):
+    """A plugin message that is no agent's (a reply to it goes to Hermes)."""
+    if not text:
+        return
+    ad = engine.adapter()
+    if ad is not None:
+        try:
+            if (await ad.send(engine.TARGET_CHAT, text, reply_to=reply_to)).success:
+                return
+        except Exception:
+            logger.exception("alternative-agents: adapter send raised")
+    await asyncio.to_thread(engine._send_standalone, text)
 
 
 # ── commands (each takes the agent first: register() binds it) ──
@@ -235,6 +274,8 @@ def _status_card(agent):
     else:
         heard = "local transcription (Whisper)"
     lines.append(f"Voice notes: {heard} · voice replies: {store.voice_reply(state)} ({cmd('voice')})")
+    if state.get("preset"):
+        lines.append(f"Conversation opened by the /{state['preset']} preset")
     if snap["busy"]:
         busy = f"Running for {snap['elapsed']} · {snap['actions']} actions"
         if snap["current"]:
@@ -259,12 +300,12 @@ async def _modes_off(but=None):
     """One mode at a time: turn off the other agents' modes."""
     for other in engine.AGENTS.values():
         if other is not but and other.store.load().get("sticky"):
-            other.store.update(sticky=None)
+            other.store.update(sticky=None, preset=None)
             await other.set_mode_banner(False)
 
 
 async def _cmd_off(agent, _raw_args: str):
-    agent.store.update(sticky=None)
+    agent.store.update(sticky=None, preset=None)
     await agent.set_mode_banner(False)
     return (f"↩️ Back to Hermes. {agent.label} stays reachable with {agent.cmd()} <message> or by replying to "
             "its messages.")
@@ -272,6 +313,7 @@ async def _cmd_off(agent, _raw_args: str):
 
 async def _cmd_new(agent, raw_args: str):
     agent.store.update(conversation_id=None)
+    await agent.end_preset()
     if raw_args.strip():
         await agent.submit(engine.Job(text=raw_args.strip(), new_conversation=True))
         return None
@@ -418,6 +460,7 @@ async def _handoff(agent, message, reply_to=None):
             + (message or f"Pick up where Hermes left off: in a few lines, say where things stand and what "
                           f"you will do next, then wait for {user}."))
     await _modes_off(but=agent)
+    await agent.end_preset()
     agent.store.update(sticky=True)
     await agent.set_mode_banner(True)
     await agent.submit(engine.Job(text=text, message_id=reply_to, new_conversation=True))
@@ -432,7 +475,7 @@ async def _cmd_back(agent, raw_args: str):
 async def _hand_back(agent, message):
     """The agent's mode off; returns the message Hermes gets: the conversation's recap, then ``message``."""
     state = agent.store.load()
-    agent.store.update(sticky=None)
+    agent.store.update(sticky=None, preset=None)
     await agent.set_mode_banner(False)
     user = workspace.USER
     recap = await asyncio.to_thread(agent.store.recap, state.get("conversation_id"), HANDBACK_TURNS, user,
@@ -545,6 +588,7 @@ async def _cmd_conv(agent, raw_args: str):
 async def _pick_conv(agent, _chat_id, value):
     conv = next((c for c in agent.store.conversations(50) if c["id"] == value), None)
     agent.store.update(conversation_id=value)
+    await agent.end_preset()
     first = f" (\"{_cut(conv['first'], 60)}\")" if conv else ""
     return f"{agent.label} conversation resumed{first}."
 
@@ -577,10 +621,84 @@ async def _cmd_btw(agent, raw_args: str):
 
 async def _cmd_retry(agent, _raw_args: str):
     last = agent.store.load().get("last_turn")
+    if last and last.get("preset"):  # the preset's prompt again, in a new conversation, as it first went
+        queued = await agent.submit(engine.Job(preset=last["preset"], new_conversation=True))
+        return f"🔁 /{last['preset']} sent to {agent.label} again" + (" (after the current answer)." if queued else ".")
     if not last or not last.get("text"):
         return "Nothing to send again."
     queued = await agent.submit(engine.Job(text=last["text"]))
     return f"🔁 Sent to {agent.label} again" + (" (after the current answer)." if queued else ".")
+
+
+# ── presets ──
+
+def _own_commands():
+    return {f"{a.backend.prefix}_{suffix}" if suffix else a.backend.prefix
+            for a in engine.AGENTS.values() for suffix, _d, _h in COMMANDS}
+
+
+async def _run_preset(name, reply_to=None):
+    """/<name>: the preset's agent in its mode, and a new conversation opened by the prompt, sent in the
+    background. Returns what to tell the user ("" when the agent's answer says it all)."""
+    setting = presets.settings(name)
+    agent = engine.AGENTS.get(setting["backend"])
+    if agent is None:
+        return f"⚠️ /{name} needs {setting['backend']}, which is not in the plugin's backends setting."
+    if not await asyncio.to_thread(presets.exists, name):
+        return f"⚠️ /{name} has no prompt any more: /preset {name} in reply to it."
+    reason = agent.backend.unavailable()
+    if reason:
+        return f"⚠️ /{name}: {reason}"
+    await _modes_off(but=agent)
+    agent.store.update(sticky=True, preset=name, conversation_id=None)
+    await agent.set_mode_banner(False)  # the mode's banner, if any, gives way to the preset's
+    await agent.set_mode_banner(True)
+    await agent.submit(engine.Job(preset=name, new_conversation=True, message_id=reply_to))
+    icon = (setting["banner"].split() or [agent.mark])[0]
+    return f"{icon} …"
+
+
+def _manage_presets(args, reply_text):
+    """/preset: list; /preset <name> in reply to a message: save it as the prompt; /preset rm <name>."""
+    words = args.split()
+    if not words:
+        listed = presets.names()
+        if not listed:
+            return "No preset yet. /preset <name> in reply to a message saves it as a prompt."
+        rows = []
+        for name in listed:
+            agent = engine.AGENTS.get(presets.settings(name)["backend"])
+            rows.append(f"/{name} · {agent.label if agent else presets.settings(name)['backend'] + ' (off)'} · "
+                        f"{len(presets.read(name))} chars")
+        return ("Presets:\n" + "\n".join(rows) + "\n\n/preset <name> in reply to a message: save it as the prompt · "
+                "/preset rm <name>")
+    if words[0] == "rm":
+        name = words[1].lower() if len(words) > 1 else ""
+        if not name or name not in presets.names():
+            return f"No /{name} preset: /preset lists them." if name else "Usage: /preset rm <name>"
+        presets.remove(name)
+        return f"🗑 /{name} removed." + (" Its settings stay in config.yaml." if name in config.cfg["presets"] else "")
+    name = words[0].lower()
+    if not reply_text.strip():
+        return f"Reply to the prompt's message with /preset {name}: it becomes /{name}'s prompt."
+    new = name not in presets.names()
+    problem = presets.name_problem(name, _own_commands()) if new else ""
+    if problem:
+        return f"/{name} can't be a preset: {problem}."
+    presets.save(name, reply_text)
+    agent = engine.AGENTS.get(presets.settings(name)["backend"])
+    return (f"✅ /{name}: prompt saved ({len(reply_text.strip())} chars) for "
+            f"{agent.label if agent else presets.settings(name)['backend']}."
+            + (f" New preset: type /{name} (in the / menu after a gateway restart)." if new else ""))
+
+
+async def _cmd_preset(raw_args: str):
+    # Normally taken by the dispatch hook, which also sees the message replied to.
+    return await asyncio.to_thread(_manage_presets, raw_args, "")
+
+
+async def _cmd_run_preset(name, _raw_args: str):
+    return f"/{name} opens its conversation from the Telegram chat set in the plugin's chat_id."
 
 
 async def _cmd_doctor(agent, _raw_args: str):

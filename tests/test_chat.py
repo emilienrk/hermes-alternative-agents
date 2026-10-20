@@ -35,6 +35,7 @@ engine = sys.modules["alt_agents_under_test.engine"]
 workspace = sys.modules["alt_agents_under_test.workspace"]
 config = sys.modules["alt_agents_under_test.config"]
 backends = sys.modules["alt_agents_under_test.backends"]
+presets = sys.modules["alt_agents_under_test.presets"]
 CHAT = "424242"
 SETTINGS = {"chat_id": CHAT, "user_name": "Alex", "backends": ["agy", "claude", "opencode"]}
 FAKES = {"agy": str(TESTS_DIR / "fake_agy.py"), "claude": str(TESTS_DIR / "fake_claude.py"),
@@ -125,7 +126,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.cfg_saved = dict(config.cfg)
         self.saved = {(module, name): getattr(module, name) for module, name in (
             (engine, "TYPING_EVERY_S"), (engine, "STATUS_EVERY_S"), (engine, "_transcribe"),
-            (workspace, "HERMES_HOME"))}
+            (workspace, "HERMES_HOME"), (presets, "DIR"))}
+        presets.DIR = self.tmp / "presets"
         plugin.configure(lambda key, default=None: SETTINGS.get(key, default))
         hermes = self.tmp / "hermes"
         (hermes / "memories").mkdir(parents=True)
@@ -761,6 +763,135 @@ class OpenCodeTests(Base):
         self.assertIn("✓ opencode config valid", report)
 
 
+class PresetTests(Base):
+    SECRET = "SECRET-PROMPT-1234 you are a rat"
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.mode("quiet")  # the fake answers "OK" instead of echoing the prompt
+
+    async def finish(self, timeout=20, agent=None):
+        await super().finish(timeout, agent or self.oc)
+
+    async def preset_cmd(self, text, reply_text=None):
+        result = await self.dispatch(event(text, msg_id="50", reply_text=reply_text))
+        self.assertEqual(result, {"action": "skip", "reason": "alternative-agents"})
+        return self.adapter.sent()[-1][1]
+
+    def assertNoSecret(self):
+        for call in self.adapter.calls:
+            self.assertNotIn("SECRET-PROMPT", repr(call))
+        for log in self.tmp.glob("*turns.log"):
+            self.assertNotIn("SECRET-PROMPT", log.read_text())
+        for state in self.tmp.glob("*state.json"):
+            self.assertNotIn("SECRET-PROMPT", state.read_text())
+
+    async def test_manage(self):
+        self.assertIn("No preset yet", await self.preset_cmd("/preset"))
+        self.assertIn("Reply to the prompt", await self.preset_cmd("/preset souris"))
+        saved = await self.preset_cmd("/preset souris", reply_text=self.SECRET)
+        self.assertIn(f"✅ /souris: prompt saved ({len(self.SECRET)} chars) for opencode. New preset", saved)
+        self.assertEqual(oct(presets.DIR.stat().st_mode & 0o777), "0o700")
+        self.assertEqual(oct(presets.path("souris").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(presets.read("souris"), self.SECRET)
+        self.assertIn(f"/souris · opencode · {len(self.SECRET)} chars", await self.preset_cmd("/preset"))
+        self.assertNotIn("New preset", await self.preset_cmd("/preset souris", reply_text=self.SECRET + "!"))
+        for taken in ("oc_new", "new", "agy", "preset", "Bad-Name"):
+            self.assertIn("can't be a preset", await self.preset_cmd(f"/preset {taken}", reply_text="x"))
+        self.assertIn("🗑 /souris removed.", await self.preset_cmd("/preset rm souris"))
+        self.assertFalse(presets.path("souris").exists())
+        self.assertNoSecret()
+
+    async def test_preset_opens_a_conversation(self):
+        config.cfg["presets"] = {"souris": {"backend": "oc", "banner": "🐀 Mode souris · /oc_off pour en sortir"}}
+        presets.save("souris", self.SECRET)
+        self.agy.store.update(sticky=True)
+        self.oc.store.update(conversation_id="ses_old")
+        result = await self.dispatch(event("/souris", msg_id="10"))
+        self.assertEqual(result["action"], "skip")
+        await self.finish()
+        call = self.calls()[0]
+        self.assertEqual(call["prompt"], self.SECRET)  # as is: no context block
+        self.assertIsNone(call["conversation"])
+        self.assertNotIn(self.SECRET, " ".join(call["args"]))
+        state = self.oc.store.load()
+        self.assertEqual((state["sticky"], state["preset"]), (True, "souris"))
+        self.assertNotIn("sticky", self.agy.store.load())
+        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐀 Mode souris"))
+        self.assertIn(("send", "🐀 …", "10"), self.adapter.calls)
+        self.assertIn("Voir main.py.\n\nOK", self.adapter.sent()[-1][1])
+        log = json.loads(self.oc.store.turns_log.read_text().splitlines()[-1])
+        self.assertEqual((log["message"], log["preset"]), ("(prompt /souris)", "souris"))
+        self.assertIn("/souris preset", await plugin._cmd_status(self.oc, ""))
+
+        await self.dispatch(event("et ensuite ?", msg_id="11"))  # the mode goes on in that conversation
+        await self.finish()
+        second = self.calls()[1]
+        self.assertEqual(second["conversation"], state["conversation_id"])
+        self.assertTrue(second["prompt"].endswith("et ensuite ?"))
+        self.assertEqual(self.oc.store.conversations()[0]["first"], "(prompt /souris)")
+        self.assertNoSecret()
+
+        pin = self.oc.store.load()["mode_pin"]
+        self.assertIn("Next message", await plugin._cmd_new(self.oc, ""))
+        self.assertNotIn("preset", self.oc.store.load())
+        self.assertTrue(self.oc.store.load()["sticky"])
+        self.assertIn(("unpin", pin), self.adapter.calls)
+        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐋 opencode mode on"))
+        await plugin._cmd_off(self.oc, "")
+        self.assertNotIn("mode_pin", self.oc.store.load())
+
+    async def test_retry_replays_the_preset(self):
+        presets.save("souris", self.SECRET)
+        self.mode("balance")
+        await self.dispatch(event("/souris", msg_id="10"))
+        await self.finish()
+        self.assertIn("Insufficient Balance", self.adapter.sent()[-1][1])
+        self.mode("quiet")
+        self.assertEqual(await plugin._cmd_retry(self.oc, ""), "🔁 /souris sent to opencode again.")
+        await self.finish()
+        self.assertEqual([c["prompt"] for c in self.calls()], [self.SECRET, self.SECRET])
+        self.assertIsNone(self.calls()[1]["conversation"])
+        self.assertNoSecret()
+
+    async def test_messages_queued_behind_the_preset_come_next(self):
+        presets.save("souris", self.SECRET)
+        self.mode("verbose")
+        await self.dispatch(event("/oc avant", msg_id="9"))
+        await asyncio.sleep(0.5)
+        await self.dispatch(event("/souris", msg_id="10"))
+        await self.dispatch(event("/oc après", msg_id="11"))
+        self.mode("quiet")
+        await self.finish(40)
+        prompts = [c["prompt"] for c in self.calls()]
+        self.assertEqual(len(prompts), 3)
+        self.assertEqual(prompts[1], self.SECRET)
+        self.assertTrue(prompts[2].endswith("après"))
+        self.assertEqual(self.calls()[2]["conversation"], self.oc.store.load()["conversation_id"])
+
+    async def test_missing_or_empty_prompt(self):
+        config.cfg["presets"] = {"souris": {}}
+        self.assertIn("/souris has no prompt", await self.preset_cmd("/souris"))
+        presets.DIR.mkdir(parents=True)
+        presets.path("souris").write_text("")
+        self.assertIn("/souris has no prompt", await self.preset_cmd("/souris"))
+        presets.save("souris", self.SECRET)
+        self.oc.backend.env_file.unlink()
+        self.assertIn("No DeepSeek key", await self.preset_cmd("/souris"))
+        self.assertIsNone(self.oc.worker)
+        self.assertEqual(self.calls(), [])
+
+    def test_preset_commands_registered(self):
+        presets.save("souris", self.SECRET)
+        names = []
+        ctx = SimpleNamespace(get_config=lambda key, default=None: SETTINGS.get(key, default),
+                              register_command=lambda name, **kw: names.append(name),
+                              register_hook=lambda *a: None, register_telegram_handler=lambda *a: None)
+        plugin.register(ctx)
+        self.assertIn("souris", names)
+        self.assertIn("preset", names)
+
+
 class CommandTests(Base):
     async def test_status_card_and_modes(self):
         card = await plugin._cmd_status(self.agy, "")
@@ -823,7 +954,7 @@ class CommandTests(Base):
         self.assertIn("cc", names)
         self.assertIn("cc-handoff", names)
         self.assertIn("oc-usage", names)
-        self.assertEqual(len(names), 3 * len(plugin.COMMANDS))
+        self.assertEqual(len(names), 3 * len(plugin.COMMANDS) + 1)  # + /preset
 
 
 class SettingsTests(Base):

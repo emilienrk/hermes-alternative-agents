@@ -29,6 +29,8 @@ DEFAULTS = {
     "opencode_effort": "",
     "opencode_mark": "🐋",
     "opencode_env_file": "~/.hermes/alternative-agents/.env",
+    # /<preset>: {name: {backend, banner, description}}, the prompts being files (presets.py)
+    "presets": {},
     # display
     "react_working": "👀",
     "react_queued": "✍",
@@ -72,6 +74,8 @@ def load(get):
     if cfg["claude_effort"] not in EFFORTS:
         cfg["claude_effort"] = ""
     cfg["opencode_effort"] = str(cfg["opencode_effort"] or "").strip().lower()
+    if not isinstance(cfg["presets"], dict):
+        cfg["presets"] = {}
     backends = [cfg["backends"]] if isinstance(cfg["backends"], str) else cfg["backends"] or []
     cfg["backends"] = [b for b in BACKENDS if b in backends]
     # "agy_task" was the tasks tool's name before Claude Code joined.

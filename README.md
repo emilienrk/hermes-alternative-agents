@@ -106,6 +106,28 @@ permission prompts.
 Measured with opencode 1.18.35: a turn costs a fixed ~30 KB of context (opencode's system prompt
 ~9 KB, its tool descriptions ~21 KB) on top of this plugin's context and the conversation.
 
+## Presets
+
+A preset is a saved prompt that opens a conversation: `/<name>` turns on its agent's mode (opencode by
+default), starts a new conversation and sends the prompt as its first message, in the background.
+Telegram shows a waiting mark, then the agent's answer, never the prompt; your next messages go on in
+that conversation, under the preset's pinned banner, until `/oc_off`, `/oc_new` or another mode.
+
+- `/preset` lists them (name, agent, length; never the prompt).
+- `/preset <name>` in reply to a message saves that message as the prompt (new or replaced). A new
+  name must not be a command already; it reaches the `/` menu after a gateway restart.
+- `/preset rm <name>` removes one.
+
+Prompts are files, `<HERMES_HOME>/alternative-agents/presets/<name>.md` (directory 700, files 600). The
+plugin reads one only to send it: it goes through stdin, without the usual context block, and is
+recorded nowhere else (the turn log says `(prompt /<name>)`). `/oc_retry` right after sends it again.
+Optional settings, per preset:
+
+```yaml
+presets:
+  rat: {backend: opencode, banner: "🐀 Mode rat · /oc_off pour en sortir", description: "…"}
+```
+
 ## Scheduled tasks
 
 `/agy_task add every day at 8am | summarize my unread mails` schedules a prompt that agy runs
@@ -171,6 +193,7 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | `chat_id` | — | **Required.** The only Telegram chat routed to the agents. Nothing is routed while it's empty. |
 | `user_name` | `the user` | How the agents' context refers to you. |
 | `backends` | `[agy]` | Agents reachable from Telegram: `agy`, `claude`, `opencode`. |
+| `presets` | `{}` | Per-preset settings: `backend`, `banner`, `description` (see [Presets](#presets)). |
 | `machine_notes` | — | Free text about the machine added to the agents' context. |
 | `skip_skills` | `[]` | Hermes skill names hidden from the agents. |
 | `timeout_minutes` | `30` | Longest turn. |

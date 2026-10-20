@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from . import workspace
+from . import presets, workspace
 from .config import cfg
 from .state import is_message
 
@@ -67,6 +67,7 @@ class Job:
     side: bool = False  # a btw message, for the side conversation
     model: str = ""  # overrides the state's model
     effort: str = ""  # overrides the state's effort
+    preset: str = ""  # its message is this preset's prompt (presets.py), read only when sent
 
 
 class Run:
@@ -191,9 +192,23 @@ class Agent:
         return is_message(state, message_id, "btw_msgs" if side else "msgs")
 
     def mode_banner(self):
+        preset = self.store.load().get("preset")
+        if preset:
+            return (presets.settings(preset)["banner"]
+                    or f"{self.mark} /{preset} · {self.label} mode · {self.cmd('off')} to go back to Hermes".strip())
         return (f"{self.mark} {self.label} mode on · {self.cmd('off')} to go back to Hermes\n".lstrip()
                 + f"Your messages, photos and voice notes go to {self.label}. For Hermes: \"Hermes …\" or a / "
                 f"command. Here /stop and /new act on {self.label}.")
+
+    async def end_preset(self):
+        """The conversation a preset opened is over: the mode stays, with its usual banner."""
+        state = self.store.load()
+        if not state.get("preset"):
+            return
+        self.store.update(preset=None)
+        if state.get("sticky"):
+            await self.set_mode_banner(False)
+            await self.set_mode_banner(True)
 
     async def restart_notice(self):
         inflight = self.store.load().get("inflight")
@@ -245,8 +260,10 @@ class Agent:
 
     async def _drain(self):
         while self.queue:
-            jobs = self.queue[:]
-            self.queue.clear()
+            # A preset's prompt opens its conversation alone: the messages queued behind it come next.
+            cut = next((i for i, job in enumerate(self.queue) if job.preset), None)
+            take = 1 if cut == 0 else len(self.queue) if cut is None else cut
+            jobs, self.queue[:] = self.queue[:take], self.queue[take:]
             try:
                 await self._turn(jobs)
             except Exception as e:  # the worker must survive and always answer
@@ -275,9 +292,12 @@ class Agent:
 
         message, files = await self._compose(jobs, verbose)
         await asyncio.to_thread(backend.workspace.prepare)
-        store.update(inflight={"message": message[:500], "at": datetime.now().isoformat(timespec="seconds")},
-                     last_turn={"text": message, "files": files})
-        prompt = await asyncio.to_thread(backend.prompt, run, message, conv)
+        preset = jobs[0].preset
+        shown = f"(prompt /{preset})" if preset else message  # what is recorded of the message
+        store.update(inflight={"message": shown[:500], "at": datetime.now().isoformat(timespec="seconds")},
+                     last_turn={"preset": preset} if preset else {"text": message, "files": files})
+        # A preset's prompt goes as is: no context block, no rules pointer.
+        prompt = message if preset else await asyncio.to_thread(backend.prompt, run, message, conv)
 
         loop = asyncio.get_running_loop()
         side_tasks = [loop.create_task(_typing_loop())]
@@ -312,10 +332,10 @@ class Agent:
         await asyncio.to_thread(store.log_turn, {
             "model": run.model, **({"effort": run.effort} if run.effort else {}),
             "conversation_id": store.load().get("conversation_id"),
-            "message": message[:500], "response": ((run.result or {}).get("response") or "")[:2000],
+            "message": shown[:500], "response": ((run.result or {}).get("response") or "")[:2000],
             "status": "STOPPED" if run.stopped else (run.result or {}).get("status", "NO_RESULT"),
             "seconds": int(time.time() - run.started), "files": [p for p, _ in files],
-            "actions": run.actions, "tokens": run.tokens, **({"cost_usd": run.cost} if run.cost else {})})
+            "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens, **({"cost_usd": run.cost} if run.cost else {})})
 
     async def _compose(self, jobs, verbose):
         """The message the agent receives, and the attachments copied to its inbox."""
@@ -323,6 +343,9 @@ class Agent:
         vmode = self.store.voice_mode(self.store.load()) if self.backend.can_hear else "local"
         user = workspace.USER
         for job in jobs:
+            if job.preset:
+                parts.append(await asyncio.to_thread(presets.read, job.preset))
+                continue
             text = job.text.strip()
             for path in job.voice:
                 if vmode == "direct":
