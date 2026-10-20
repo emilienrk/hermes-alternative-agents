@@ -1,7 +1,7 @@
-"""Tasks: scheduled prompts that an agent (agy, Claude Code) runs instead of Hermes' paid LLM.
+"""Tasks: scheduled prompts that an agent (agy, Claude Code, opencode) runs instead of Hermes' paid LLM.
 
 Each task is a Hermes cron job in no_agent mode whose script (generated under
-<HERMES_HOME>/scripts/agy-tasks/, where Hermes requires cron scripts to live) runs task_run.py;
+<HERMES_HOME>/scripts/alternative-agents-tasks/, where Hermes requires cron scripts to live) runs task_run.py;
 the script's output, the agent's answer, is what the job delivers. Hermes keeps the schedule, the
 delivery and the job list; tasks.json only remembers which jobs are the agents', and whose.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 PLUGIN_NAME = "alternative-agents"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-SCRIPTS_SUBDIR = "agy-tasks"
+SCRIPTS_SUBDIR = "alternative-agents-tasks"
 
 _lock = threading.Lock()
 

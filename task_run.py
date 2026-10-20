@@ -19,9 +19,6 @@ from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-# Tasks created before Claude Code joined carried these settings themselves.
-_LEGACY_KEYS = {"agy_bin": "agy_path", "workspace": "workspace", "timeout_minutes": "timeout_minutes",
-                "user": "user_name", "mark": "mark"}
 CONTEXT_TIMEOUT_S = 30 * 60
 CONTEXT_MAX_CHARS = 40_000
 
@@ -45,7 +42,6 @@ def _settings(task):
     except (OSError, yaml.YAMLError):
         config = {}
     settings = dict((((config.get("plugins") or {}).get("entries") or {}).get("alternative-agents") or {}).get("settings") or {})
-    settings.update({new: task[old] for old, new in _LEGACY_KEYS.items() if task.get(old)})
     settings.update(task.get("settings") or {})
     settings["backends"] = [task.get("backend") or "agy"]  # this task's agent, whatever the chat enables
     return settings

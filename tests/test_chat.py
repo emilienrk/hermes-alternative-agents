@@ -1217,7 +1217,7 @@ class AgentTests(Base):
         finally:
             tasks._cron, tasks.HERMES_HOME, tasks._registry_path = saved
 
-    def run_task(self, task, runner="task_run.py"):
+    def run_task(self, task):
         import subprocess
         hermes = self.tmp / "hermes"
         (hermes / "config.yaml").write_text(json.dumps({"plugins": {"entries": {"alternative-agents": {"settings": {
@@ -1225,26 +1225,25 @@ class AgentTests(Base):
             "opencode_path": FAKES["opencode"], "opencode_workspace": str(self.tmp / "ow"),
             "opencode_env_file": str(self.oc.backend.env_file)}}}}}))
         env = {**os.environ, "HERMES_HOME": str(hermes)}
-        return subprocess.run([sys.executable, str(PLUGIN_DIR / runner), json.dumps(task)],
+        return subprocess.run([sys.executable, str(PLUGIN_DIR / "task_run.py"), json.dumps(task)],
                               capture_output=True, text=True, env=env, timeout=60)
 
     async def test_agy_task_run(self):
-        # Tasks created before Claude Code joined: agy_run.py and their own settings.
-        task = {"name": "digest", "prompt": "résume", "agy_bin": FAKES["agy"], "workspace": str(self.tmp),
-                "model": "m1", "timeout_minutes": 1, "user": "Alex", "mark": "🛸"}
-        out = self.run_task(task, "agy_run.py")
+        task = {"name": "digest", "prompt": "résume", "model": "m1", "settings": {
+            "agy_path": FAKES["agy"], "workspace": str(self.tmp), "timeout_minutes": 1, "mark": "🛸"}}
+        out = self.run_task(task)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertTrue(out.stdout.startswith("🛸 agy · digest\n\n"), out.stdout)
         self.assertIn("ECHO:", out.stdout)
         self.assertIn("Voir main.py.", out.stdout)
         self.assertIn("unattended", self.calls()[0]["prompt"])
         self.mode("crash")
-        out = self.run_task(task, "agy_run.py")
+        out = self.run_task(task)
         self.assertEqual(out.returncode, 1)
         self.assertIn("❌", out.stdout)
 
     async def test_task_context_and_silence(self):
-        task = {"name": "health", "prompt": "check it", "agy_bin": FAKES["agy"], "workspace": str(self.tmp),
+        task = {"name": "health", "prompt": "check it", "settings": {"agy_path": FAKES["agy"], "workspace": str(self.tmp)},
                 "context_command": ["echo", "container Up"]}
         out = self.run_task(task)
         self.assertEqual(out.returncode, 0, out.stderr)
