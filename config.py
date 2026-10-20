@@ -29,7 +29,7 @@ DEFAULTS = {
     "opencode_effort": "",
     "opencode_mark": "🐋",
     "opencode_env_file": "~/.hermes/alternative-agents/.env",
-    # /<preset>: {name: {backend, banner, description}}, the prompts being files (presets.py)
+    # /<preset>: {name: {backend, banner, description, bare}}, the prompts being files (presets.py)
     "presets": {},
     # display
     "react_working": "👀",

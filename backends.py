@@ -30,6 +30,7 @@ class Backend:
     default_model = ""
     can_hear = True  # takes voice notes as audio
     can_fork = False  # a btw can start from a copy of the main conversation
+    can_bare = False  # a preset's conversation can hold its prompt and the user's messages only
     restart_notice = ""
     default_mark = ""
 
@@ -128,7 +129,7 @@ class Agy(Backend):
             cmd[1:1] = ["--conversation", conv]
         return cmd, None
 
-    def env(self, base):
+    def env(self, base, run=None):
         return base
 
     def on_event(self, run, event):
@@ -294,7 +295,7 @@ class Claude(Backend):
             cmd += ["--resume", conv] + (["--fork-session"] if fork else [])
         return cmd, prompt
 
-    def env(self, base):
+    def env(self, base, run=None):
         # The subscription pays, never an API key; Hermes' memory is the shared one.
         env = {k: v for k, v in base.items() if not k.startswith("ANTHROPIC_") and k != "CLAUDECODE"}
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
@@ -424,6 +425,7 @@ class OpenCode(Backend):
     default_mark = "🐋"
     can_hear = False
     can_fork = True
+    can_bare = True
     restart_notice = "Conversation lost"
     PROVIDER = "deepseek"
     BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -478,6 +480,8 @@ class OpenCode(Backend):
 
     def command(self, run, prompt, conv, fork=False):
         cmd = [self.bin, "run", "--format", "json", "--dir", str(self.workspace.root), "--model", run.model, "--auto"]
+        if run.bare:
+            cmd += ["--agent", workspace.BARE_AGENT]
         if run.effort:
             cmd += ["--variant", run.effort]
         if conv:
@@ -487,9 +491,10 @@ class OpenCode(Backend):
             cmd += ["--title", f"Telegram {datetime.now():%Y-%m-%d %H:%M}"]
         return cmd, prompt  # through stdin: no argv size limit, nothing in `ps`
 
-    def env(self, base):
+    def env(self, base, run=None):
         env = {k: v for k, v in base.items() if not k.startswith(("DEEPSEEK_", "OPENCODE_"))}
-        env.update(self.ISOLATION, OPENCODE_CONFIG_DIR=str(self.workspace.config_dir))
+        config_dir = self.workspace.bare_dir if run is not None and run.bare else self.workspace.config_dir
+        env.update(self.ISOLATION, OPENCODE_CONFIG_DIR=str(config_dir))
         key = self.api_key()
         if key:
             env["DEEPSEEK_API_KEY"] = key

@@ -156,12 +156,21 @@ that conversation, under the preset's pinned banner, until you leave the mode.
 
 Prompts are files, `<HERMES_HOME>/alternative-agents/presets/<name>.md` (directory 700, files 600).
 The plugin reads one only to send it: through stdin, without the usual context block, and recorded
-nowhere else (the turn log says `(prompt /<name>)`). `/oc_retry` right after sends it again. Optional
-settings, per preset:
+nowhere else (the turn log says `(prompt /<name>)`). `/oc_retry` right after sends it again.
+
+On opencode, a preset's conversation is bare: DeepSeek gets the prompt, then your messages as you
+wrote them, and nothing else. No opencode system prompt, rules, Hermes context or tools: that
+conversation runs from `<opencode_workspace>/.hermes-bare/`, whose agent has no tools and whose
+plugin empties the system prompt. It stays bare when you leave the mode and come back to it (`/oc`,
+`/oc_conv`); `/oc_new` starts an ordinary one. A preset with `bare: false` gets opencode's usual
+setup instead. On agy and Claude Code, the prompt opens a conversation with their usual setup.
+
+Optional settings, per preset:
 
 ```yaml
 presets:
   reviewer: {backend: claude, banner: "🔍 Code review mode", description: "Review the current branch"}
+  tutor: {bare: false}  # opencode with its tools and Hermes' context
 ```
 
 ## Scheduled tasks
@@ -229,7 +238,7 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | `chat_id` | — | **Required.** The only Telegram chat routed to the agents. Nothing is routed while it's empty. |
 | `user_name` | `the user` | How the agents' context refers to you. |
 | `backends` | `[agy]` | Agents reachable from Telegram: `agy`, `claude`, `opencode`. |
-| `presets` | `{}` | Per-preset settings: `backend`, `banner`, `description`. |
+| `presets` | `{}` | Per-preset settings: `backend`, `banner`, `description`, `bare` (opencode, default `true`). |
 | `machine_notes` | — | Free text about the machine added to the agents' context. |
 | `skip_skills` | `[]` | Hermes skill names hidden from the agents. |
 | `timeout_minutes` | `30` | Longest turn. |

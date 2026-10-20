@@ -14,7 +14,8 @@ opens the message instead: turn_context().
 opencode runs apart from the user's own opencode setup too: OPENCODE_CONFIG_DIR points it at
 <cwd>/.hermes/ (opencode.json with the MCP servers, AGENTS.md, skills/ linking Hermes' skills)
 instead of ~/.config/opencode, and backends.py turns off what it would read of Claude Code's.
-It gets the same turn_context() as Claude Code.
+It gets the same turn_context() as Claude Code. A bare preset's conversation runs from
+<cwd>/.hermes-bare/ instead, where DeepSeek gets the messages and nothing else.
 """
 
 import hashlib
@@ -38,6 +39,14 @@ HERMES_PYTHON = Path(sys.executable)
 THREAD_MESSAGES = 12
 THREAD_MSG_CHARS = 400
 _PLAIN_NAME = re.compile(r"^[\w.-]+$")
+BARE_AGENT = "bare"
+# opencode builds the system prompt from the agent's prompt plus an environment block (model, cwd, date)
+# and AGENTS.md files; this hook (opencode ≥ 1.18) drops it all.
+BARE_PLUGIN = """\
+export const Bare = async () => ({
+  "experimental.chat.system.transform": async (_input, output) => { output.system.length = 0 },
+})
+"""
 
 # Set by configure() from the plugin settings.
 CHAT_ID = ""
@@ -353,9 +362,10 @@ class OpenCodeWorkspace(Workspace):
         self.config_file = self.config_dir / "opencode.json"
         self.rules_file = self.config_dir / "AGENTS.md"
         self.skills_dir = self.config_dir / "skills"
+        self.bare_dir = self.root / ".hermes-bare"
 
     def steps(self):
-        return (self._write_dirs, self._write_skills, self._write_config, self._write_rules)
+        return (self._write_dirs, self._write_skills, self._write_config, self._write_rules, self._write_bare)
 
     def _write_dirs(self, summary, now):
         for d in (self.inbox, self.outbox, self.skills_dir):
@@ -390,6 +400,17 @@ class OpenCodeWorkspace(Workspace):
                   "mcp": mcp}
         _write_if_changed(self.config_file, json.dumps(config, indent=2) + "\n", mode=0o600)  # MCP bearer tokens
         summary["mcp_servers"] = sorted(mcp)
+
+    def _write_bare(self, summary, now):
+        """The config of bare conversations: no rules, skills or MCP servers, an agent without tools, and a
+        plugin emptying the system prompt, so the model gets the messages and nothing else."""
+        (self.bare_dir / "plugin").mkdir(parents=True, exist_ok=True)
+        # A blank prompt, not an empty one: opencode would put its own in its place.
+        agent = {"mode": "primary", "prompt": " ", "tools": {"*": False}}
+        config = {"$schema": "https://opencode.ai/config.json", "autoupdate": False, "share": "disabled",
+                  "agent": {BARE_AGENT: agent}}
+        _write_if_changed(self.bare_dir / "opencode.json", json.dumps(config, indent=2) + "\n")
+        _write_if_changed(self.bare_dir / "plugin" / "bare.js", BARE_PLUGIN)
 
     def bridge_config(self):
         spec = (json.loads(self.config_file.read_text()).get("mcp") or {}).get("hermes")

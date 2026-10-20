@@ -74,8 +74,9 @@ class Job:
 class Run:
     """The live turn."""
 
-    def __init__(self, jobs, model, effort="", side=False):
+    def __init__(self, jobs, model, effort="", side=False, bare=False):
         self.jobs, self.model, self.effort, self.side = jobs, model, effort, side
+        self.bare = bare  # the agent gets the messages and nothing else (backend.can_bare)
         self.conversation_id = None
         self.started = time.time()
         self.proc = None
@@ -285,19 +286,22 @@ class Agent:
         conv = state.get("conversation_id")
         verbose = store.verbose(state)
         anchor = next((job.message_id for job in reversed(jobs) if job.message_id), None)
-        run = self.run = Run(jobs, store.model(state), store.effort(state))
+        preset = jobs[0].preset
+        # A bare preset's conversation holds its prompt and the user's messages, and nothing else.
+        bare = backend.can_bare and (presets.settings(preset)["bare"] if preset
+                                     else bool(conv) and conv == state.get("bare"))
+        run = self.run = Run(jobs, store.model(state), store.effort(state), bare=bare)
         for job in jobs:
             if job.message_id and REACT_WORKING:
                 await react(job.message_id, REACT_WORKING)
 
-        message, files = await self._compose(jobs, verbose)
+        message, files = await self._compose(jobs, verbose, bare)
         await asyncio.to_thread(backend.workspace.prepare)
-        preset = jobs[0].preset
         shown = f"(prompt /{preset})" if preset else message  # what is recorded of the message
         store.update(inflight={"message": shown[:500], "at": datetime.now().isoformat(timespec="seconds")},
                      last_turn={"preset": preset} if preset else {"text": message, "files": files})
         # A preset's prompt goes as is: no context block, no rules pointer.
-        prompt = message if preset else await asyncio.to_thread(backend.prompt, run, message, conv)
+        prompt = message if preset or bare else await asyncio.to_thread(backend.prompt, run, message, conv)
 
         loop = asyncio.get_running_loop()
         side_tasks = [loop.create_task(_typing_loop())]
@@ -306,7 +310,7 @@ class Agent:
         notice = ""
         try:
             await self._exec(run, prompt, conv)
-            if run.failed() and conv and backend.restart_fresh(run.error_text()):
+            if run.failed() and conv and not bare and backend.restart_fresh(run.error_text()):
                 notice = f"♻️ {backend.restart_notice}: new conversation, seeded with the recent thread."
                 store.update(conversation_id=None)
                 recap = store.recap(conv, RECAP_TURNS, workspace.USER, self.label)
@@ -338,7 +342,7 @@ class Agent:
             "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens,
             **({"cost_usd": run.cost} if run.cost else {})})
 
-    async def _compose(self, jobs, verbose):
+    async def _compose(self, jobs, verbose, bare=False):
         """The message the agent receives, and the attachments copied to its inbox."""
         parts, files = [], []
         vmode = self.store.voice_mode(self.store.load()) if self.backend.can_hear else "local"
@@ -372,6 +376,8 @@ class Agent:
             parts.append(text or "Look at the attached file(s).")
         if len(parts) == 1:
             message = parts[0]
+        elif bare:
+            message = "\n\n".join(parts)
         else:
             message = f"Several messages from {user}, in order:\n\n" + "\n\n".join(
                 f"{i}. {part}" for i, part in enumerate(parts, 1))
@@ -412,7 +418,7 @@ class Agent:
         root = backend.workspace.root
         root.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(root), env=backend.env(_base_env()),
+            *cmd, cwd=str(root), env=backend.env(_base_env(), run),
             stdin=asyncio.subprocess.DEVNULL if stdin is None else asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, limit=STREAM_LIMIT,
             start_new_session=True)  # own process group: stop/timeout also reach the agent's children
@@ -451,7 +457,8 @@ class Agent:
             known = run.conversation_id
             self.backend.on_event(run, event)
             if run.conversation_id != known and not run.side:
-                self.store.update(conversation_id=run.conversation_id)
+                self.store.update(conversation_id=run.conversation_id,
+                                  **({"bare": run.conversation_id} if run.bare else {}))
 
     # ── Telegram output ──
 

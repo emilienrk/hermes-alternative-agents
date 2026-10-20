@@ -111,7 +111,8 @@ config_schema:
     default: {}
     description: >
       Optional settings of the presets (/<name>, prompts saved with /preset):
-      {name: {backend: opencode | agy | claude, banner: "…", description: "…"}}. Default backend: opencode.
+      {name: {backend: opencode | agy | claude, banner: "…", description: "…", bare: true}}. Default backend:
+      opencode. bare (opencode only, default true): the conversation holds the prompt and your messages, nothing else.
   machine_notes:
     type: str
     default: ""

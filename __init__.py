@@ -622,7 +622,8 @@ async def _pick_conv(agent, _chat_id, value):
     preset = (conv or {}).get("preset") or None
     before = agent.store.load()
     await _modes_off(but=agent)
-    agent.store.update(conversation_id=value, sticky=True, preset=preset)
+    bare = bool(preset) and presets.settings(preset)["bare"]
+    agent.store.update(conversation_id=value, sticky=True, preset=preset, **({"bare": value} if bare else {}))
     if before.get("sticky") and before.get("preset") != preset:
         await agent.set_mode_banner(False)  # the banner changes with the preset
     await agent.set_mode_banner(True)

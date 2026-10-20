@@ -844,6 +844,52 @@ class PresetTests(Base):
         await plugin._cmd_off(self.oc, "")
         self.assertNotIn("mode_pin", self.oc.store.load())
 
+    async def test_bare_preset_conversation(self):
+        presets.save("mouse", self.SECRET)
+        await self.dispatch(event("/mouse", msg_id="10"))
+        await self.finish()
+        first = self.calls()[0]
+        bare_dir = self.oc.backend.workspace.bare_dir
+        self.assertEqual(first["env"]["OPENCODE_CONFIG_DIR"], str(bare_dir))
+        self.assertIn("--agent bare", " ".join(first["args"]))
+        conv = self.oc.store.load()["conversation_id"]
+
+        await self.dispatch(event("what next?", msg_id="11"))
+        await self.finish()
+        await plugin._cmd_off(self.oc, "")
+        await self.dispatch(event("/oc and then?", msg_id="12"))  # out of the mode, the same conversation
+        await self.finish()
+        self.assertEqual([(c["prompt"], c["conversation"]) for c in self.calls()[1:]],
+                         [("what next?", conv), ("and then?", conv)])  # no context block
+        self.assertTrue(all(c["env"]["OPENCODE_CONFIG_DIR"] == str(bare_dir) for c in self.calls()))
+
+        await plugin._cmd_new(self.oc, "")
+        await self.dispatch(event("/oc hello", msg_id="13"))
+        await self.finish()
+        normal = self.calls()[-1]
+        self.assertNotEqual(normal["env"]["OPENCODE_CONFIG_DIR"], str(bare_dir))
+        self.assertNotIn("--agent", normal["args"])
+        self.assertTrue(normal["prompt"].endswith("hello") and normal["prompt"] != "hello")
+
+        await plugin._pick_conv(self.oc, CHAT, conv)  # resumed: bare again
+        await self.dispatch(event("back", msg_id="14"))
+        await self.finish()
+        self.assertEqual((self.calls()[-1]["prompt"], self.calls()[-1]["conversation"]), ("back", conv))
+        self.assertNoSecret()
+
+    async def test_preset_with_its_agent_setup(self):
+        config.cfg["presets"] = {"mouse": {"bare": False}}
+        presets.save("mouse", self.SECRET)
+        await self.dispatch(event("/mouse", msg_id="10"))
+        await self.finish()
+        await self.dispatch(event("what next?", msg_id="11"))
+        await self.finish()
+        first, second = self.calls()
+        self.assertEqual(first["prompt"], self.SECRET)
+        self.assertEqual(first["env"]["OPENCODE_CONFIG_DIR"], str(self.oc.backend.workspace.config_dir))
+        self.assertNotIn("--agent", first["args"])
+        self.assertTrue(second["prompt"].endswith("what next?") and second["prompt"] != "what next?")
+
     async def test_retry_replays_the_preset(self):
         presets.save("mouse", self.SECRET)
         self.mode("balance")
@@ -1355,6 +1401,11 @@ class WorkspaceTests(Base):
         for text in ("You are opencode", "`oc_task`", "`skill` tool", "[Context from the plugin]"):
             self.assertIn(text, rules)
         self.assertEqual((ws.skills_dir / "deploy").resolve(), skill.resolve())
+        bare = json.loads((ws.bare_dir / "opencode.json").read_text())  # bare conversations: nothing but messages
+        self.assertEqual(sorted(bare), ["$schema", "agent", "autoupdate", "share"])
+        self.assertEqual(bare["agent"]["bare"]["tools"], {"*": False})
+        self.assertIn("output.system.length = 0", (ws.bare_dir / "plugin" / "bare.js").read_text())
+        self.assertEqual(sorted(p.name for p in ws.bare_dir.iterdir()), ["opencode.json", "plugin"])
 
         config.cfg.update(mcp_on_demand=[])
         try:

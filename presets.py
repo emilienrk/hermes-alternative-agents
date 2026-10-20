@@ -21,12 +21,13 @@ _RESERVED = {"preset", "new", "stop", "start", "help"}
 
 
 def settings(name):
-    """The preset's settings: backend (an agent's name), banner, description."""
+    """The preset's settings: backend (an agent's name), banner, description, bare (opencode only: the
+    conversation holds the prompt and the user's messages, nothing else)."""
     raw = (cfg.get("presets") or {}).get(name)
     raw = raw if isinstance(raw, dict) else {}
     backend = str(raw.get("backend") or DEFAULT_BACKEND).strip().lower()
     return {"backend": _ALIASES.get(backend, backend), "banner": str(raw.get("banner") or "").strip(),
-            "description": str(raw.get("description") or "").strip()}
+            "description": str(raw.get("description") or "").strip(), "bare": raw.get("bare") is not False}
 
 
 def path(name):
