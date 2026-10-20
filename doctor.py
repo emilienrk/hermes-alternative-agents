@@ -8,9 +8,12 @@ from . import engine
 
 
 async def report(agent):
+    async def workspace_then_bridge():  # the bridge check reads the MCP config the workspace writes
+        lines = await asyncio.to_thread(_workspace, agent)
+        return lines + await _bridge(agent)
     checks = await asyncio.gather(
-        asyncio.to_thread(_chat, agent), asyncio.to_thread(agent.backend.checks), asyncio.to_thread(_workspace, agent),
-        _bridge(agent), asyncio.to_thread(_menu, agent), return_exceptions=True)
+        asyncio.to_thread(_chat, agent), asyncio.to_thread(agent.backend.checks), workspace_then_bridge(),
+        asyncio.to_thread(_menu, agent), return_exceptions=True)
     lines = []
     for check in checks:
         if isinstance(check, Exception):
