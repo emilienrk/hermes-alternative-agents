@@ -36,6 +36,7 @@ DEFAULTS = {
     "react_queued": "✍",
     "footer": True,
     "verbose": False,
+    "leave_button": "Back to Hermes",
     # voice
     "voice_input": "direct",
     "voice_reply": "off",
@@ -80,7 +81,8 @@ def load(get):
     backends = [cfg["backends"]] if isinstance(cfg["backends"], str) else cfg["backends"] or []
     cfg["backends"] = [b for b in BACKENDS if b in backends]
     on_demand = cfg["mcp_on_demand"]
-    cfg["mcp_on_demand"] = [b for b in BACKENDS if b in ([on_demand] if isinstance(on_demand, str) else on_demand or [])]
+    on_demand = [on_demand] if isinstance(on_demand, str) else on_demand or []
+    cfg["mcp_on_demand"] = [b for b in BACKENDS if b in on_demand]
     # "agy_task" was the tasks tool's name before Claude Code joined.
     tools = ["tasks" if t == "agy_task" else t for t in (cfg["bridge_tools"] or [])]
     cfg["bridge_tools"] = [t for t in BRIDGE_TOOLS if t in tools]

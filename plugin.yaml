@@ -140,6 +140,10 @@ config_schema:
     type: bool
     default: false
     description: Live status of the agent's actions by default (/agy_verbose, /cc_verbose toggle it).
+  leave_button:
+    type: str
+    default: "Back to Hermes"
+    description: Label of the button under the pinned mode banner, which turns the mode off.
   voice_input:
     type: str
     choices: [direct, local]

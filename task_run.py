@@ -41,7 +41,8 @@ def _settings(task):
         config = yaml.safe_load((HERMES_HOME / "config.yaml").read_text()) or {}
     except (OSError, yaml.YAMLError):
         config = {}
-    settings = dict((((config.get("plugins") or {}).get("entries") or {}).get("alternative-agents") or {}).get("settings") or {})
+    entry = ((config.get("plugins") or {}).get("entries") or {}).get("alternative-agents") or {}
+    settings = dict(entry.get("settings") or {})
     settings.update(task.get("settings") or {})
     settings["backends"] = [task.get("backend") or "agy"]  # this task's agent, whatever the chat enables
     return settings

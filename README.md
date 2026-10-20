@@ -44,7 +44,7 @@ Only from the one Telegram chat you configure (examples with agy; `/cc…` and `
 | anything else | Hermes, as usual |
 
 One mode at a time: `/cc_on` turns agy mode off, and the other way round. While a mode is on, a
-banner stays pinned at the top of the chat; its **Quitter** button goes back to Hermes, as `/agy_off` does. In agy mode, `/stop` and `/new` act on agy. A reply
+banner stays pinned at the top of the chat; its button (**Back to Hermes**, `leave_button`) goes back to Hermes, as `/agy_off` does. In agy mode, `/stop` and `/new` act on agy. A reply
 still reaches the agent you reply to, whatever the mode.
 
 Photos, files and voice notes ride along. Voice notes go to agy as audio (default) or are
@@ -161,7 +161,7 @@ settings, per preset:
 
 ```yaml
 presets:
-  rat: {backend: opencode, banner: "🐀 Mode rat", description: "New conversation in rat mode"}
+  reviewer: {backend: claude, banner: "🔍 Code review mode", description: "Review the current branch"}
 ```
 
 ## Scheduled tasks
@@ -255,6 +255,7 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | `react_working`, `react_queued` | `👀`, `✍` | Reactions on your messages while an agent works / while they wait (`""` for none). |
 | `footer` | `true` | `— 🛸 agy · 2 min` under answers. |
 | `verbose` | `false` | Live status of the agent's actions by default. |
+| `leave_button` | `Back to Hermes` | Label of the button under the pinned mode banner. |
 | **Voice** | | |
 | `voice_input` | `direct` | `direct`: the audio goes to agy (Google); `local`: Hermes' Whisper transcribes it first. Claude Code and opencode always get `local`. |
 | `voice_reply` | `off` | `off`, `mirror` (voice answer when you sent a voice note), `always`. |
@@ -304,6 +305,7 @@ They import Hermes' gateway modules, so run them with Hermes' interpreter:
 ```bash
 ~/.hermes/hermes-agent/venv/bin/python tests/test_chat.py
 hermes plugins validate .
+ruff check .
 ```
 
 ## License

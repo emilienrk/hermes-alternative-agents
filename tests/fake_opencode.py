@@ -60,14 +60,14 @@ def main():
         sys.exit(1)
     tokens = {"total": 1290, "input": 1234, "output": 56, "reasoning": 0, "cache": {"write": 0, "read": 1000}}
     emit("step_start", {"type": "step-start"})
-    emit("text", {"type": "text", "text": "Je regarde."})
+    emit("text", {"type": "text", "text": "Looking."})
     time.sleep({"slow": 60, "verbose": 9}.get(mode, 0.2))
     emit("tool_use", {"type": "tool", "tool": "bash", "callID": "call_1", "state": {
         "status": "completed", "input": {"command": f"ls {Path.home()}/projects", "description": "List"},
         "output": "x\n", "title": "ls"}})
     emit("step_finish", {"type": "step-finish", "reason": "tool-calls", "tokens": tokens, "cost": 0.0002})
     emit("step_start", {"type": "step-start"})
-    emit("text", {"type": "text", "text": f"Voir [main.py](file://{Path.home()}/main.py)."})
+    emit("text", {"type": "text", "text": f"See [main.py](file://{Path.home()}/main.py)."})
     emit("text", {"type": "text", "text": "OK" if mode == "quiet" else f"ECHO:{prompt[-200:]}"})
     emit("step_finish", {"type": "step-finish", "reason": "stop", "tokens": tokens, "cost": 0.0003})
 

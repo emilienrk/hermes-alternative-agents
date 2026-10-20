@@ -190,11 +190,11 @@ class RoutingTests(Base):
         return plugin.route(ev, {"agy": agy or {}, "claude": claude or {}})
 
     def test_commands(self):
-        kind, agent, job = self.route(event("/agy liste les fichiers"))
-        self.assertEqual((kind, agent, job.text), ("job", self.agy, "liste les fichiers"))
-        self.assertEqual(self.route(event("/agy@HermesBot liste"))[2].text, "liste")
+        kind, agent, job = self.route(event("/agy list the files"))
+        self.assertEqual((kind, agent, job.text), ("job", self.agy, "list the files"))
+        self.assertEqual(self.route(event("/agy@HermesBot list"))[2].text, "list")
         self.assertTrue(self.route(event("/agy_new on repart"))[2].new_conversation)
-        self.assertEqual(self.route(event("/cc liste"))[1], self.claude)
+        self.assertEqual(self.route(event("/cc list"))[1], self.claude)
         self.assertTrue(self.route(event("/cc_new on repart"))[2].new_conversation)
         self.assertIsNone(self.route(event("/agy")))  # status card: the command handler answers
         self.assertIsNone(self.route(event("/cc")))
@@ -203,9 +203,9 @@ class RoutingTests(Base):
 
     def test_sticky_mode(self):
         sticky = {"sticky": True}
-        self.assertEqual(self.route(event("salut"), agy=sticky)[2].text, "salut")
-        self.assertEqual(self.route(event("salut"), claude=sticky)[1], self.claude)
-        self.assertIsNone(self.route(event("Hermes, fais le point"), agy=sticky))
+        self.assertEqual(self.route(event("hello"), agy=sticky)[2].text, "hello")
+        self.assertEqual(self.route(event("hello"), claude=sticky)[1], self.claude)
+        self.assertIsNone(self.route(event("Hermes, give me a status"), agy=sticky))
         self.assertIsNone(self.route(event("Hermès : ça va ?"), claude=sticky))
         self.assertIsNone(self.route(event("/status"), agy=sticky))
         self.assertEqual(self.route(event("/new"), claude=sticky), ("new", self.claude, None))
@@ -215,22 +215,22 @@ class RoutingTests(Base):
 
     def test_reply_to_an_agent(self):
         state = {"msgs": ["55"]}
-        job = self.route(event("et maintenant ?", reply_to="55", reply_text="réponse d'agy"), agy=state)[2]
+        job = self.route(event("et maintenant ?", reply_to="55", reply_text="agy's answer"), agy=state)[2]
         self.assertEqual((job.text, job.quoted), ("et maintenant ?", ""))
         self.assertIsNone(self.route(event("et maintenant ?", reply_to="56"), agy=state))
-        quoted = self.route(event("/agy fais ça", reply_to="56", reply_text="le plan de Hermes"), agy=state)[2]
+        quoted = self.route(event("/agy do this", reply_to="56", reply_text="le plan de Hermes"), agy=state)[2]
         self.assertEqual(quoted.quoted, "le plan de Hermes")
         # In agy mode, a reply to Claude's message still goes to Claude.
         kind, agent, _job = self.route(event("et toi ?", reply_to="77"), agy={"sticky": True}, claude={"msgs": ["77"]})
         self.assertEqual((kind, agent), ("job", self.claude))
-        self.assertEqual(self.route(event("vu", reply_to="9"), agy={"agy_msgs": ["9"]})[1], self.agy)  # older state
+        self.assertEqual(self.route(event("seen", reply_to="9"), agy={"agy_msgs": ["9"]})[1], self.agy)  # older state
 
     def test_media_voice_and_inlined_documents(self):
         doc = self.tmp / "notes.txt"
-        doc.write_text("ligne 1\nligne 2")
-        text = f"[Content of notes.txt]:\nligne 1\nligne 2\n\n/agy résume\n[document 'notes.txt' saved at: {doc}]"
+        doc.write_text("line 1\nline 2")
+        text = f"[Content of notes.txt]:\nline 1\nline 2\n\n/agy summarize\n[document 'notes.txt' saved at: {doc}]"
         job = self.route(event(text, media=[doc], types=["text/plain"], mtype="document"))[2]
-        self.assertEqual((job.text, job.files), ("résume", [(str(doc), "text/plain")]))
+        self.assertEqual((job.text, job.files), ("summarize", [(str(doc), "text/plain")]))
         voice = self.route(event("", media=["/c/v.ogg"], types=["audio/ogg"], mtype="voice"), agy={"sticky": True})[2]
         self.assertEqual((voice.voice, voice.files), (["/c/v.ogg"], []))
         self.assertIsNone(self.route(event("", media=["/c/v.ogg"], mtype="voice")))
@@ -238,14 +238,14 @@ class RoutingTests(Base):
         self.assertEqual(photo.files, [("/c/p.jpg", "image/jpeg")])
 
     async def test_dispatch_ignores_other_chats(self):
-        self.assertIsNone(await self.dispatch(event("/agy salut", chat="42")))
+        self.assertIsNone(await self.dispatch(event("/agy hello", chat="42")))
         self.assertIsNone(self.agy.worker)
 
     async def test_nothing_routed_without_chat_id(self):
         engine.TARGET_CHAT = ""
         try:
-            self.assertIsNone(await self.dispatch(event("/agy salut", chat="")))
-            self.assertIsNone(await self.dispatch(event("/agy salut")))
+            self.assertIsNone(await self.dispatch(event("/agy hello", chat="")))
+            self.assertIsNone(await self.dispatch(event("/agy hello")))
         finally:
             engine.TARGET_CHAT = CHAT
         self.assertIsNone(self.agy.worker)
@@ -254,19 +254,19 @@ class RoutingTests(Base):
         self.set(backends=["agy"])
         engine.AGENTS.pop("claude")
         engine.AGENTS.pop("opencode")
-        self.assertIsNone(plugin.route(event("/cc salut"), {"agy": {}}))
+        self.assertIsNone(plugin.route(event("/cc hello"), {"agy": {}}))
 
 
 class TurnTests(Base):
     async def test_basic_turn(self):
         store = self.agy.store
-        result = await self.dispatch(event("/agy liste mes projets", msg_id="7"))
+        result = await self.dispatch(event("/agy list my projects", msg_id="7"))
         self.assertEqual(result, {"action": "skip", "reason": "alternative-agents"})
         await self.finish()
         reply = self.adapter.sent()[-1]
         self.assertIn("ECHO:", reply[1])
-        self.assertIn("liste mes projets", reply[1])
-        self.assertIn("Voir main.py.", reply[1])  # file:// link reduced to its label
+        self.assertIn("list my projects", reply[1])
+        self.assertIn("See main.py.", reply[1])  # file:// link reduced to its label
         self.assertIn("— 🛸 agy", reply[1])
         self.assertNotIn("run_command", reply[1])  # discreet mode hides actions
         self.assertEqual(reply[2], "7")
@@ -283,35 +283,35 @@ class TurnTests(Base):
         log = [json.loads(line) for line in store.turns_log.read_text().splitlines()]
         self.assertEqual((log[-1]["status"], log[-1]["tokens"]), ("SUCCESS", 54321))
 
-        await self.dispatch(event("/agy et ensuite ?", msg_id="8"))
+        await self.dispatch(event("/agy what next?", msg_id="8"))
         await self.finish()
         second = self.calls()[1]
         self.assertEqual(second["conversation"], state["conversation_id"])
         self.assertNotIn("Context:", second["prompt"])
 
     async def test_reply_threading_reaches_agy(self):
-        await self.dispatch(event("/agy salut", msg_id="7"))
+        await self.dispatch(event("/agy hello", msg_id="7"))
         await self.finish()
         agy_id = str(self.adapter.next_id)
-        result = await self.dispatch(event("précise", msg_id="9", reply_to=agy_id))
+        result = await self.dispatch(event("be precise", msg_id="9", reply_to=agy_id))
         self.assertEqual(result["action"], "skip")
         await self.finish()
-        self.assertTrue(self.calls()[-1]["prompt"].endswith("précise"))
+        self.assertTrue(self.calls()[-1]["prompt"].endswith("be precise"))
 
     async def test_queue_merges_messages(self):
         self.mode("verbose")
-        await self.dispatch(event("/agy tâche longue", msg_id="1"))
+        await self.dispatch(event("/agy long task", msg_id="1"))
         await asyncio.sleep(0.5)
-        await self.dispatch(event("/agy et aussi ça", msg_id="2"))
-        await self.dispatch(event("/agy et ça", msg_id="3"))
+        await self.dispatch(event("/agy and this too", msg_id="2"))
+        await self.dispatch(event("/agy and this", msg_id="3"))
         self.assertIn(("react", "2", "✍"), self.adapter.calls)
         self.mode("ok")
         await self.finish(40)
         prompts = [c["prompt"] for c in self.calls()]
         self.assertEqual(len(prompts), 2)
         self.assertIn("Several messages from Alex", prompts[1])
-        self.assertIn("1. et aussi ça", prompts[1])
-        self.assertIn("2. et ça", prompts[1])
+        self.assertIn("1. and this too", prompts[1])
+        self.assertIn("2. and this", prompts[1])
         self.assertEqual(self.adapter.sent()[-1][2], "3")
 
     async def test_stop_kills_the_turn(self):
@@ -337,7 +337,7 @@ class TurnTests(Base):
 
     async def test_launch_failure_cleans_up(self):
         self.agy.backend.bin = str(self.tmp / "missing-agy")
-        await self.dispatch(event("/agy salut", msg_id="7"))
+        await self.dispatch(event("/agy hello", msg_id="7"))
         await self.finish()
         self.assertIn("❌ alternative-agents", self.adapter.sent()[-1][1])
         self.assertNotIn("inflight", self.agy.store.load())
@@ -347,13 +347,13 @@ class TurnTests(Base):
     async def test_saturated_conversation_restarts_fresh(self):
         store = self.agy.store
         store.update(conversation_id="old-conv")
-        store.log_turn({"conversation_id": "old-conv", "message": "avant", "response": "réponse d'avant"})
+        store.log_turn({"conversation_id": "old-conv", "message": "before", "response": "earlier answer"})
         self.mode("saturated")
         await self.dispatch(event("/agy continue", msg_id="1"))
         await self.finish()
         calls = self.calls()
         self.assertEqual([c["conversation"] for c in calls], ["old-conv", None])
-        self.assertIn("réponse d'avant", calls[1]["prompt"])
+        self.assertIn("earlier answer", calls[1]["prompt"])
         reply = self.adapter.sent()[-1][1]
         self.assertIn("♻️", reply)
         self.assertIn("ECHO:", reply)
@@ -398,7 +398,7 @@ class TurnTests(Base):
         status = self.adapter.sent()[0]
         self.assertTrue(status[1].startswith("🛸 agy working"))
         self.assertIn("▶ run_command ls ~/projects", status[1])
-        self.assertIn("💬 Je regarde.", status[1])
+        self.assertIn("💬 Looking.", status[1])
         final_edit = [c for c in self.adapter.calls if c[0] == "edit" and c[3]][-1]
         self.assertIn("🔧 1 actions", final_edit[2])
         self.assertIn("54k tokens", final_edit[2])
@@ -441,7 +441,7 @@ class TurnTests(Base):
     async def test_attachments_are_copied_to_inbox(self):
         photo = self.tmp / "photo.jpg"
         photo.write_bytes(b"jpg")
-        await self.dispatch(event("/agy c'est quoi ?", media=[photo], types=["image/jpeg"], mtype="photo"))
+        await self.dispatch(event("/agy what is it?", media=[photo], types=["image/jpeg"], mtype="photo"))
         await self.finish()
         prompt = self.calls()[0]["prompt"]
         self.assertIn("Files attached by Alex", prompt)
@@ -472,11 +472,11 @@ class ClaudeTests(Base):
 
     async def test_turn_and_resume(self):
         store = self.claude.store
-        await self.dispatch(event("/cc liste mes projets", msg_id="7"))
+        await self.dispatch(event("/cc list my projects", msg_id="7"))
         await self.finish()
         reply = self.adapter.sent()[-1]
         self.assertIn("ECHO:", reply[1])
-        self.assertIn("Voir main.py.", reply[1])
+        self.assertIn("See main.py.", reply[1])
         self.assertIn("— ✳️ Claude", reply[1])
         self.assertEqual(reply[2], "7")
         call = self.calls()[0]
@@ -491,7 +491,7 @@ class ClaudeTests(Base):
         prompt = call["prompt"]  # through stdin
         self.assertTrue(prompt.startswith("[Context from the plugin]\nNow: "))
         self.assertIn("likes tea", prompt)
-        self.assertTrue(prompt.endswith("liste mes projets"))
+        self.assertTrue(prompt.endswith("list my projects"))
         state = store.load()
         conv = state["conversation_id"]
         self.assertEqual(state["context"]["conversation_id"], conv)
@@ -500,14 +500,14 @@ class ClaudeTests(Base):
         log = json.loads(store.turns_log.read_text().splitlines()[-1])
         self.assertEqual((log["status"], log["tokens"], log["cost_usd"]), ("SUCCESS", 51004, 0.25))
 
-        await self.dispatch(event("/cc et ensuite ?", msg_id="8"))
+        await self.dispatch(event("/cc what next?", msg_id="8"))
         await self.finish()
         second = self.calls()[1]
         self.assertEqual(second["conversation"], conv)
         self.assertFalse(second["fork"])
         self.assertNotIn("likes tea", second["prompt"])  # memory unchanged: not sent again
         (workspace.HERMES_HOME / "memories" / "MEMORY.md").write_text("likes coffee now")
-        await self.dispatch(event("/cc et là ?", msg_id="9"))
+        await self.dispatch(event("/cc and now?", msg_id="9"))
         await self.finish()
         self.assertIn("likes coffee now", self.calls()[2]["prompt"])
 
@@ -520,7 +520,7 @@ class ClaudeTests(Base):
         self.assertEqual(await plugin._cmd_model(self.claude, "sonnet"), "Claude model → sonnet")
         self.assertEqual(await plugin._cmd_model(self.claude, "claude-opus-5-5"), "Claude model → claude-opus-5-5")
         self.assertIn("unknown until the next turn", await plugin._cmd_usage(self.claude, ""))
-        await self.dispatch(event("/cc salut", msg_id="7"))
+        await self.dispatch(event("/cc hello", msg_id="7"))
         await self.finish()
         args = self.calls()[0]["args"]
         self.assertEqual(args[args.index("--model") + 1], "claude-opus-5-5")
@@ -538,7 +538,7 @@ class ClaudeTests(Base):
         status = self.adapter.sent()[0]
         self.assertTrue(status[1].startswith("✳️ Claude working"))
         self.assertIn("▶ Bash ls ~/projects", status[1])
-        self.assertIn("💬 Je regarde.", status[1])
+        self.assertIn("💬 Looking.", status[1])
         final_edit = [c for c in self.adapter.calls if c[0] == "edit" and c[3]][-1]
         self.assertIn("🔧 1 actions", final_edit[2])
         self.assertIn("✓ Bash ls ~/projects", final_edit[2])
@@ -546,19 +546,19 @@ class ClaudeTests(Base):
     async def test_lost_conversation_restarts_fresh(self):
         store = self.claude.store
         store.update(conversation_id="gone")
-        store.log_turn({"conversation_id": "gone", "message": "avant", "response": "réponse d'avant"})
+        store.log_turn({"conversation_id": "gone", "message": "before", "response": "earlier answer"})
         self.mode("missing")
         await self.dispatch(event("/cc continue", msg_id="1"))
         await self.finish()
         calls = self.calls()
         self.assertEqual([c["conversation"] for c in calls], ["gone", None])
-        self.assertIn("réponse d'avant", calls[1]["prompt"])
+        self.assertIn("earlier answer", calls[1]["prompt"])
         self.assertIn("♻️ Conversation lost or too long", self.adapter.sent()[-1][1])
         self.assertNotEqual(store.load()["conversation_id"], "gone")
 
     async def test_quota_hint(self):
         self.mode("quota")
-        await self.dispatch(event("/cc salut", msg_id="1"))
+        await self.dispatch(event("/cc hello", msg_id="1"))
         await self.finish()
         reply = self.adapter.sent()[-1][1]
         self.assertIn("❌ Claude ERROR: You've hit your limit", reply)
@@ -603,7 +603,7 @@ class ClaudeTests(Base):
         self.assertIn(("unpin", agy_pin), self.adapter.calls)
         self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("✳️ Claude mode on · for Hermes"))
         self.assertIn("Claude mode is on", await plugin._cmd_status(self.agy, ""))
-        result = await self.dispatch(event("salut", msg_id="4"))
+        result = await self.dispatch(event("hello", msg_id="4"))
         self.assertEqual(result["action"], "skip")
         await self.finish()
         self.assertEqual(self.calls()[0]["agent"], "claude")
@@ -639,11 +639,11 @@ class OpenCodeTests(Base):
 
     async def test_turn_and_resume(self):
         store = self.oc.store
-        await self.dispatch(event("/oc liste mes projets", msg_id="7"))
+        await self.dispatch(event("/oc list my projects", msg_id="7"))
         await self.finish()
         reply = self.adapter.sent()[-1]
-        self.assertIn("Voir main.py.\n\nECHO:", reply[1])  # the last step's text parts
-        self.assertNotIn("Je regarde", reply[1])
+        self.assertIn("See main.py.\n\nECHO:", reply[1])  # the last step's text parts
+        self.assertNotIn("Looking", reply[1])
         self.assertIn("— 🐋 opencode", reply[1])
         call = self.calls()[0]
         args = call["args"]
@@ -652,14 +652,14 @@ class OpenCodeTests(Base):
         self.assertIn("--auto", args)
         self.assertIn("--title", args)  # no title request to the model
         self.assertNotIn("--variant", args)
-        self.assertNotIn("liste mes projets", " ".join(args))  # the message goes through stdin
+        self.assertNotIn("list my projects", " ".join(args))  # the message goes through stdin
         self.assertEqual(call["env"], {"DEEPSEEK_API_KEY": "sk-test", "OPENCODE_DISABLE_CLAUDE_CODE": "1",
                                        "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
                                        "OPENCODE_CONFIG_DIR": str(self.oc.backend.workspace.config_dir)})
         self.assertIsNone(call["conversation"])
         self.assertTrue(call["prompt"].startswith("[Context from the plugin]\nNow: "))
         self.assertIn("likes tea", call["prompt"])
-        self.assertTrue(call["prompt"].endswith("liste mes projets"))
+        self.assertTrue(call["prompt"].endswith("list my projects"))
         state = store.load()
         conv = state["conversation_id"]
         self.assertTrue(conv.startswith("ses_"))
@@ -668,7 +668,7 @@ class OpenCodeTests(Base):
         self.assertEqual((log["status"], log["tokens"], log["actions"]), ("SUCCESS", 2580, ["✓ bash ls ~/projects"]))
         self.assertAlmostEqual(log["cost_usd"], 0.0005)
 
-        await self.dispatch(event("/oc et ensuite ?", msg_id="8"))
+        await self.dispatch(event("/oc what next?", msg_id="8"))
         await self.finish()
         second = self.calls()[1]
         self.assertEqual((second["conversation"], second["fork"]), (conv, False))
@@ -677,7 +677,7 @@ class OpenCodeTests(Base):
 
     async def test_no_key_no_run(self):
         self.oc.backend.env_file.unlink()
-        await self.dispatch(event("/oc salut", msg_id="7"))
+        await self.dispatch(event("/oc hello", msg_id="7"))
         await self.finish()
         self.assertEqual(self.calls(), [])
         reply = self.adapter.sent()[-1][1]
@@ -699,9 +699,10 @@ class OpenCodeTests(Base):
         self.assertEqual([c["label"] for c in self.adapter.sent("picker")[0][2]], ["low", "high", "max"])
         self.assertEqual(await plugin._cmd_effort(self.oc, "high"), "opencode effort → high")
         self.assertIn("Unknown model", await plugin._cmd_model(self.oc, "gpt-9"))
-        self.assertEqual(await plugin._cmd_model(self.oc, "deepseek-v4-pro"), "opencode model → deepseek/deepseek-v4-pro")
+        self.assertEqual(await plugin._cmd_model(self.oc, "deepseek-v4-pro"),
+                         "opencode model → deepseek/deepseek-v4-pro")
         self.oc.backend.balance = lambda: {"USD": "1.98"}
-        await self.dispatch(event("/oc salut", msg_id="7"))
+        await self.dispatch(event("/oc hello", msg_id="7"))
         await self.finish()
         args = self.calls()[0]["args"]
         self.assertEqual(args[args.index("--model") + 1], "deepseek/deepseek-v4-pro")
@@ -717,25 +718,25 @@ class OpenCodeTests(Base):
         await self.finish(30)
         status = self.adapter.sent()[0]
         self.assertTrue(status[1].startswith("🐋 opencode working"))
-        self.assertIn("💬 Je regarde.", status[1])
+        self.assertIn("💬 Looking.", status[1])
         final_edit = [c for c in self.adapter.calls if c[0] == "edit" and c[3]][-1]
         self.assertIn("✓ bash ls ~/projects", final_edit[2])
 
     async def test_lost_session_restarts_fresh(self):
         store = self.oc.store
         store.update(conversation_id="ses_gone")
-        store.log_turn({"conversation_id": "ses_gone", "message": "avant", "response": "réponse d'avant"})
+        store.log_turn({"conversation_id": "ses_gone", "message": "before", "response": "earlier answer"})
         self.mode("missing")
         await self.dispatch(event("/oc continue", msg_id="1"))
         await self.finish()
         calls = self.calls()
         self.assertEqual([c["conversation"] for c in calls], ["ses_gone", None])
-        self.assertIn("réponse d'avant", calls[1]["prompt"])
+        self.assertIn("earlier answer", calls[1]["prompt"])
         self.assertIn("♻️ Conversation lost", self.adapter.sent()[-1][1])
 
     async def test_balance_hint(self):
         self.mode("balance")
-        await self.dispatch(event("/oc salut", msg_id="1"))
+        await self.dispatch(event("/oc hello", msg_id="1"))
         await self.finish()
         reply = self.adapter.sent()[-1][1]
         self.assertIn("❌ opencode ERROR: Insufficient Balance (HTTP 402)", reply)
@@ -766,7 +767,7 @@ class OpenCodeTests(Base):
 
 
 class PresetTests(Base):
-    SECRET = "SECRET-PROMPT-1234 you are a rat"
+    SECRET = "SECRET-PROMPT-1234 you are a mouse"
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
@@ -790,26 +791,26 @@ class PresetTests(Base):
 
     async def test_manage(self):
         self.assertIn("No preset yet", await self.preset_cmd("/preset"))
-        self.assertIn("Reply to the prompt", await self.preset_cmd("/preset souris"))
-        saved = await self.preset_cmd("/preset souris", reply_text=self.SECRET)
-        self.assertIn(f"✅ /souris: prompt saved ({len(self.SECRET)} chars) for opencode. New preset", saved)
+        self.assertIn("Reply to the prompt", await self.preset_cmd("/preset mouse"))
+        saved = await self.preset_cmd("/preset mouse", reply_text=self.SECRET)
+        self.assertIn(f"✅ /mouse: prompt saved ({len(self.SECRET)} chars) for opencode. New preset", saved)
         self.assertEqual(oct(presets.DIR.stat().st_mode & 0o777), "0o700")
-        self.assertEqual(oct(presets.path("souris").stat().st_mode & 0o777), "0o600")
-        self.assertEqual(presets.read("souris"), self.SECRET)
-        self.assertIn(f"/souris · opencode · {len(self.SECRET)} chars", await self.preset_cmd("/preset"))
-        self.assertNotIn("New preset", await self.preset_cmd("/preset souris", reply_text=self.SECRET + "!"))
+        self.assertEqual(oct(presets.path("mouse").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(presets.read("mouse"), self.SECRET)
+        self.assertIn(f"/mouse · opencode · {len(self.SECRET)} chars", await self.preset_cmd("/preset"))
+        self.assertNotIn("New preset", await self.preset_cmd("/preset mouse", reply_text=self.SECRET + "!"))
         for taken in ("oc_new", "new", "agy", "preset", "Bad-Name"):
             self.assertIn("can't be a preset", await self.preset_cmd(f"/preset {taken}", reply_text="x"))
-        self.assertIn("🗑 /souris removed.", await self.preset_cmd("/preset rm souris"))
-        self.assertFalse(presets.path("souris").exists())
+        self.assertIn("🗑 /mouse removed.", await self.preset_cmd("/preset rm mouse"))
+        self.assertFalse(presets.path("mouse").exists())
         self.assertNoSecret()
 
     async def test_preset_opens_a_conversation(self):
-        config.cfg["presets"] = {"souris": {"backend": "oc", "banner": "🐀 Mode souris · /oc_off pour en sortir"}}
-        presets.save("souris", self.SECRET)
+        config.cfg["presets"] = {"mouse": {"backend": "oc", "banner": "🐭 Mouse mode · /oc_off to leave"}}
+        presets.save("mouse", self.SECRET)
         self.agy.store.update(sticky=True)
         self.oc.store.update(conversation_id="ses_old")
-        result = await self.dispatch(event("/souris", msg_id="10"))
+        result = await self.dispatch(event("/mouse", msg_id="10"))
         self.assertEqual(result["action"], "skip")
         await self.finish()
         call = self.calls()[0]
@@ -817,21 +818,21 @@ class PresetTests(Base):
         self.assertIsNone(call["conversation"])
         self.assertNotIn(self.SECRET, " ".join(call["args"]))
         state = self.oc.store.load()
-        self.assertEqual((state["sticky"], state["preset"]), (True, "souris"))
+        self.assertEqual((state["sticky"], state["preset"]), (True, "mouse"))
         self.assertNotIn("sticky", self.agy.store.load())
-        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐀 Mode souris"))
-        self.assertIn(("send", "🐀 …", "10"), self.adapter.calls)
-        self.assertIn("Voir main.py.\n\nOK", self.adapter.sent()[-1][1])
+        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐭 Mouse mode"))
+        self.assertIn(("send", "🐭 …", "10"), self.adapter.calls)
+        self.assertIn("See main.py.\n\nOK", self.adapter.sent()[-1][1])
         log = json.loads(self.oc.store.turns_log.read_text().splitlines()[-1])
-        self.assertEqual((log["message"], log["preset"]), ("(prompt /souris)", "souris"))
-        self.assertIn("/souris preset", await plugin._cmd_status(self.oc, ""))
+        self.assertEqual((log["message"], log["preset"]), ("(prompt /mouse)", "mouse"))
+        self.assertIn("/mouse preset", await plugin._cmd_status(self.oc, ""))
 
-        await self.dispatch(event("et ensuite ?", msg_id="11"))  # the mode goes on in that conversation
+        await self.dispatch(event("what next?", msg_id="11"))  # the mode goes on in that conversation
         await self.finish()
         second = self.calls()[1]
         self.assertEqual(second["conversation"], state["conversation_id"])
-        self.assertTrue(second["prompt"].endswith("et ensuite ?"))
-        self.assertEqual(self.oc.store.conversations()[0]["first"], "(prompt /souris)")
+        self.assertTrue(second["prompt"].endswith("what next?"))
+        self.assertEqual(self.oc.store.conversations()[0]["first"], "(prompt /mouse)")
         self.assertNoSecret()
 
         pin = self.oc.store.load()["mode_pin"]
@@ -844,53 +845,53 @@ class PresetTests(Base):
         self.assertNotIn("mode_pin", self.oc.store.load())
 
     async def test_retry_replays_the_preset(self):
-        presets.save("souris", self.SECRET)
+        presets.save("mouse", self.SECRET)
         self.mode("balance")
-        await self.dispatch(event("/souris", msg_id="10"))
+        await self.dispatch(event("/mouse", msg_id="10"))
         await self.finish()
         self.assertIn("Insufficient Balance", self.adapter.sent()[-1][1])
         self.mode("quiet")
-        self.assertEqual(await plugin._cmd_retry(self.oc, ""), "🔁 /souris sent to opencode again.")
+        self.assertEqual(await plugin._cmd_retry(self.oc, ""), "🔁 /mouse sent to opencode again.")
         await self.finish()
         self.assertEqual([c["prompt"] for c in self.calls()], [self.SECRET, self.SECRET])
         self.assertIsNone(self.calls()[1]["conversation"])
         self.assertNoSecret()
 
     async def test_messages_queued_behind_the_preset_come_next(self):
-        presets.save("souris", self.SECRET)
+        presets.save("mouse", self.SECRET)
         self.mode("verbose")
-        await self.dispatch(event("/oc avant", msg_id="9"))
+        await self.dispatch(event("/oc before", msg_id="9"))
         await asyncio.sleep(0.5)
-        await self.dispatch(event("/souris", msg_id="10"))
-        await self.dispatch(event("/oc après", msg_id="11"))
+        await self.dispatch(event("/mouse", msg_id="10"))
+        await self.dispatch(event("/oc after", msg_id="11"))
         self.mode("quiet")
         await self.finish(40)
         prompts = [c["prompt"] for c in self.calls()]
         self.assertEqual(len(prompts), 3)
         self.assertEqual(prompts[1], self.SECRET)
-        self.assertTrue(prompts[2].endswith("après"))
+        self.assertTrue(prompts[2].endswith("after"))
         self.assertEqual(self.calls()[2]["conversation"], self.oc.store.load()["conversation_id"])
 
     async def test_missing_or_empty_prompt(self):
-        config.cfg["presets"] = {"souris": {}}
-        self.assertIn("/souris has no prompt", await self.preset_cmd("/souris"))
+        config.cfg["presets"] = {"mouse": {}}
+        self.assertIn("/mouse has no prompt", await self.preset_cmd("/mouse"))
         presets.DIR.mkdir(parents=True)
-        presets.path("souris").write_text("")
-        self.assertIn("/souris has no prompt", await self.preset_cmd("/souris"))
-        presets.save("souris", self.SECRET)
+        presets.path("mouse").write_text("")
+        self.assertIn("/mouse has no prompt", await self.preset_cmd("/mouse"))
+        presets.save("mouse", self.SECRET)
         self.oc.backend.env_file.unlink()
-        self.assertIn("No DeepSeek key", await self.preset_cmd("/souris"))
+        self.assertIn("No DeepSeek key", await self.preset_cmd("/mouse"))
         self.assertIsNone(self.oc.worker)
         self.assertEqual(self.calls(), [])
 
     def test_preset_commands_registered(self):
-        presets.save("souris", self.SECRET)
+        presets.save("mouse", self.SECRET)
         names = []
         ctx = SimpleNamespace(get_config=lambda key, default=None: SETTINGS.get(key, default),
                               register_command=lambda name, **kw: names.append(name),
                               register_hook=lambda *a: None, register_telegram_handler=lambda *a: None)
         plugin.register(ctx)
-        self.assertIn("souris", names)
+        self.assertIn("mouse", names)
         self.assertIn("preset", names)
 
 
@@ -918,7 +919,7 @@ class CommandTests(Base):
         await plugin._cmd_on(self.oc, "")
         _kind, _banner, markup = self.adapter.sent("bot_send")[-1]
         button = markup.inline_keyboard[0][0]
-        self.assertEqual((button.text, button.callback_data), ("Quitter", "alt-agents:leave:opencode"))
+        self.assertEqual((button.text, button.callback_data), ("Back to Hermes", "alt-agents:leave:opencode"))
         pin = self.oc.store.load()["mode_pin"]
         deleted = []
 
@@ -970,45 +971,45 @@ class CommandTests(Base):
     async def test_conversations(self):
         store = self.agy.store
         self.assertEqual(await plugin._cmd_conv(self.agy, ""), "No agy conversation recorded.")
-        store.log_turn({"conversation_id": "c1", "message": "premier sujet"})
-        store.log_turn({"conversation_id": "c2", "message": "second sujet"})
+        store.log_turn({"conversation_id": "c1", "message": "first topic"})
+        store.log_turn({"conversation_id": "c2", "message": "second topic"})
         self.assertIsNone(await plugin._cmd_conv(self.agy, ""))
         choices = self.adapter.sent("picker")[0][2]
         self.assertEqual([c["value"] for c in choices], ["c2", "c1"])
-        self.assertIn("premier sujet", await plugin._cmd_conv(self.agy, "2"))
+        self.assertIn("first topic", await plugin._cmd_conv(self.agy, "2"))
         self.assertEqual(store.load()["conversation_id"], "c1")
 
     async def test_resume_turns_the_mode_on_with_the_preset_banner(self):
-        config.cfg["presets"] = {"souris": {"backend": "oc", "banner": "🐀 Mode souris"}}
+        config.cfg["presets"] = {"mouse": {"backend": "oc", "banner": "🐭 Mouse mode"}}
         store = self.oc.store
-        store.log_turn({"conversation_id": "plain", "message": "un sujet"})
-        store.log_turn({"conversation_id": "rat", "message": "(prompt /souris)", "preset": "souris"})
-        store.log_turn({"conversation_id": "rat", "message": "et ensuite ?"})
+        store.log_turn({"conversation_id": "plain", "message": "a topic"})
+        store.log_turn({"conversation_id": "rat", "message": "(prompt /mouse)", "preset": "mouse"})
+        store.log_turn({"conversation_id": "rat", "message": "what next?"})
         self.agy.store.update(sticky=True)
         await plugin._cmd_on(self.agy, "")
         agy_pin = self.agy.store.load()["mode_pin"]
 
         self.assertIsNone(await plugin._cmd_conv(self.oc, ""))
-        self.assertTrue(self.adapter.sent("picker")[-1][2][0]["label"].endswith("/souris · et ensuite ?"))
+        self.assertTrue(self.adapter.sent("picker")[-1][2][0]["label"].endswith("/mouse · what next?"))
         reply = await plugin._cmd_conv(self.oc, "1")
-        self.assertIn("/souris · et ensuite ?", reply)
+        self.assertIn("/mouse · what next?", reply)
         state = store.load()
-        self.assertEqual((state["conversation_id"], state["sticky"], state["preset"]), ("rat", True, "souris"))
+        self.assertEqual((state["conversation_id"], state["sticky"], state["preset"]), ("rat", True, "mouse"))
         self.assertNotIn("sticky", self.agy.store.load())  # one mode at a time
         self.assertIn(("unpin", agy_pin), self.adapter.calls)
-        self.assertEqual(self.adapter.sent("bot_send")[-1][1], "🐀 Mode souris")
+        self.assertEqual(self.adapter.sent("bot_send")[-1][1], "🐭 Mouse mode")
         rat_pin = state["mode_pin"]
 
         await plugin._cmd_conv(self.oc, "1")  # the same again: the banner stays
         self.assertEqual(store.load()["mode_pin"], rat_pin)
 
-        self.assertIn("un sujet", await plugin._cmd_conv(self.oc, "2"))
+        self.assertIn("a topic", await plugin._cmd_conv(self.oc, "2"))
         state = store.load()
         self.assertEqual((state["conversation_id"], state["sticky"], state.get("preset")), ("plain", True, None))
         self.assertIn(("unpin", rat_pin), self.adapter.calls)
         self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐋 opencode mode on"))
 
-        await self.dispatch(event("la suite", msg_id="20"))  # goes to opencode, in that conversation
+        await self.dispatch(event("next one", msg_id="20"))  # goes to opencode, in that conversation
         await self.finish(agent=self.oc)
         self.assertEqual(self.calls()[-1]["conversation"], "plain")
 
@@ -1028,7 +1029,7 @@ class CommandTests(Base):
 class SettingsTests(Base):
     async def test_no_reactions_no_footer(self):
         self.set(react_working="", footer=False, mark="")
-        await self.dispatch(event("/agy salut", msg_id="7"))
+        await self.dispatch(event("/agy hello", msg_id="7"))
         await self.finish()
         self.assertNotIn(("react", "7", "👀"), self.adapter.calls)
         self.assertNotIn("— ", self.adapter.sent()[-1][1])
@@ -1036,7 +1037,7 @@ class SettingsTests(Base):
     async def test_custom_mark_and_reaction(self):
         self.set(react_working="🔥")
         self.agy.backend.mark = "🤖"
-        await self.dispatch(event("/agy salut", msg_id="7"))
+        await self.dispatch(event("/agy hello", msg_id="7"))
         await self.finish()
         self.assertIn(("react", "7", "🔥"), self.adapter.calls)
         self.assertIn("— 🤖 agy", self.adapter.sent()[-1][1])
@@ -1062,7 +1063,7 @@ class SettingsTests(Base):
         self.agy._speak = speak
         self.assertIn("voice note too", await plugin._cmd_voice(self.agy, "reply mirror"))
         self.agy.store.update(sticky=True)
-        await self.dispatch(event("écris", msg_id="1"))
+        await self.dispatch(event("write", msg_id="1"))
         await self.finish()
         self.assertEqual(spoken, [])
         voice = self.tmp / "v.ogg"
@@ -1075,7 +1076,7 @@ class SettingsTests(Base):
         self.assertIn("Invalid", await plugin._cmd_voice(self.agy, "reply loud"))
 
     async def test_spoken_text(self):
-        self.assertEqual(engine._spoken_text("Voir [doc](https://x.y)\nMEDIA:/tmp/a.png\nfin"), "Voir doc\nfin")
+        self.assertEqual(engine._spoken_text("See [doc](https://x.y)\nMEDIA:/tmp/a.png\nend"), "See doc\nend")
 
     async def test_effort_switches_model_variant(self):
         models = [("gemini-3.8-flash-high", "Flash (High)"), ("gemini-3.8-flash-low", "Flash (Low)"),
@@ -1197,16 +1198,16 @@ class AgentTests(Base):
         tasks._registry_path = lambda: self.tmp / "tasks.json"
         try:
             self.assertIn("Usage", await plugin._cmd_task(self.agy, "add every day"))
-            added = await plugin._cmd_task(self.agy, "add every day at 8am | résume mes mails")
+            added = await plugin._cmd_task(self.agy, "add every day at 8am | summarize my mails")
             self.assertIn("scheduled", added)
             create = calls[0]
             self.assertTrue(create["no_agent"])
             self.assertEqual(create["deliver"], f"telegram:{CHAT}")
-            self.assertEqual(create["name"], "agy · résume mes mails")
+            self.assertEqual(create["name"], "agy · summarize my mails")
             script = self.tmp / "scripts" / create["script"]
             self.assertIn("task_run.py", script.read_text())
             self.assertIn("/agy_task", script.read_text())
-            self.assertIn("1. résume mes mails · every day at 8am", await plugin._cmd_task(self.agy, ""))
+            self.assertIn("1. summarize my mails · every day at 8am", await plugin._cmd_task(self.agy, ""))
             await plugin._cmd_task(self.claude, "add weekdays at 7am | point du jour")
             self.assertIn('"backend": "claude"', (self.tmp / "scripts" / calls[-1]["script"]).read_text())
             self.assertIn("1. point du jour", await plugin._cmd_task(self.claude, ""))
@@ -1229,13 +1230,13 @@ class AgentTests(Base):
                               capture_output=True, text=True, env=env, timeout=60)
 
     async def test_agy_task_run(self):
-        task = {"name": "digest", "prompt": "résume", "model": "m1", "settings": {
+        task = {"name": "digest", "prompt": "summarize", "model": "m1", "settings": {
             "agy_path": FAKES["agy"], "workspace": str(self.tmp), "timeout_minutes": 1, "mark": "🛸"}}
         out = self.run_task(task)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertTrue(out.stdout.startswith("🛸 agy · digest\n\n"), out.stdout)
         self.assertIn("ECHO:", out.stdout)
-        self.assertIn("Voir main.py.", out.stdout)
+        self.assertIn("See main.py.", out.stdout)
         self.assertIn("unattended", self.calls()[0]["prompt"])
         self.mode("crash")
         out = self.run_task(task)
@@ -1243,7 +1244,8 @@ class AgentTests(Base):
         self.assertIn("❌", out.stdout)
 
     async def test_task_context_and_silence(self):
-        task = {"name": "health", "prompt": "check it", "settings": {"agy_path": FAKES["agy"], "workspace": str(self.tmp)},
+        task = {"name": "health", "prompt": "check it",
+                "settings": {"agy_path": FAKES["agy"], "workspace": str(self.tmp)},
                 "context_command": ["echo", "container Up"]}
         out = self.run_task(task)
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -1256,7 +1258,7 @@ class AgentTests(Base):
         self.assertEqual((out.returncode, out.stdout), (0, ""))  # Hermes' cron delivers nothing
 
     async def test_claude_task_run(self):
-        out = self.run_task({"backend": "claude", "name": "point", "prompt": "fais le point", "model": ""})
+        out = self.run_task({"backend": "claude", "name": "point", "prompt": "give me a status", "model": ""})
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertTrue(out.stdout.startswith("✳️ Claude · point\n\n"), out.stdout)
         call = self.calls()[0]
@@ -1265,7 +1267,7 @@ class AgentTests(Base):
         self.assertIsNone(call["conversation"])
 
     async def test_opencode_task_run(self):
-        out = self.run_task({"backend": "opencode", "name": "point", "prompt": "fais le point", "model": ""})
+        out = self.run_task({"backend": "opencode", "name": "point", "prompt": "give me a status", "model": ""})
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertTrue(out.stdout.startswith("🐋 opencode · point\n\n"), out.stdout)
         call = self.calls()[0]

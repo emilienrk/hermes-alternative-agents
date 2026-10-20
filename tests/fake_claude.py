@@ -54,16 +54,16 @@ def main():
         return
     emit({"type": "stream_event", "event": {"type": "message_start"}})
     emit({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0,
-                                            "delta": {"type": "text_delta", "text": "Je regarde.\n"}}})
+                                            "delta": {"type": "text_delta", "text": "Looking.\n"}}})
     command = f"ls {Path.home()}/projects"
     emit({"type": "assistant", "message": {"content": [
-        {"type": "text", "text": "Je regarde."},
+        {"type": "text", "text": "Looking."},
         {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": command, "description": "List"}}]}})
     time.sleep({"slow": 60, "verbose": 9}.get(mode, 0.2))
     emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "x"}]}})
     response = f"ECHO:{prompt[-200:]}"
     emit({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "total_cost_usd": 0.25,
-          "result": f"Voir [main.py](file://{Path.home()}/main.py).\n{response}",
+          "result": f"See [main.py](file://{Path.home()}/main.py).\n{response}",
           "usage": {"input_tokens": 4, "output_tokens": 300, "cache_creation_input_tokens": 700,
                     "cache_read_input_tokens": 50000}})
 

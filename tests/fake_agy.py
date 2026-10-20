@@ -46,7 +46,7 @@ def main():
         print("panic: something broke", flush=True)
         sys.exit(2)
     emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": 1, "state": "DONE",
-                                                  "step_type": "agent_response", "text_delta": "Je regarde.\n"}})
+                                                  "step_type": "agent_response", "text_delta": "Looking.\n"}})
     emit({"event": "step_update", "step_update": {
         "conversation_id": cid, "step_index": 2, "state": "ACTIVE", "step_type": "tool", "tool_name": "run_command",
         "tool_info": {"name": "run_command", "parameters": {"CommandLine": f"ls {Path.home()}/projects"}}}})
@@ -63,7 +63,7 @@ def main():
         emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS", "response": "[SILENT]"}})
         return
     emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
-                                        "response": f"Voir [main.py](file://{Path.home()}/main.py).\n{response}",
+                                        "response": f"See [main.py](file://{Path.home()}/main.py).\n{response}",
                                         "usage": {"total_tokens": 54321}}})
 
 

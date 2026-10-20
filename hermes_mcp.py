@@ -40,7 +40,8 @@ TASK_TOOL = f"{TASK_SETTINGS.get('prefix') or 'agy'}_task"
 # Hermes' MCP servers behind two tools, their schemas fetched when needed: an agent without deferred
 # tool loading would otherwise carry every MCP tool's description in each request.
 ON_DEMAND = os.environ.get("ALT_AGENTS_MCP_ON_DEMAND") == "1"
-CATALOG = Path(os.environ.get("ALT_AGENTS_MCP_CATALOG") or HERMES_HOME / "plugin-data/alternative-agents/mcp_catalog.json")
+CATALOG = Path(os.environ.get("ALT_AGENTS_MCP_CATALOG")
+               or HERMES_HOME / "plugin-data" / "alternative-agents" / "mcp_catalog.json")
 SUMMARY_CHARS = 70
 
 

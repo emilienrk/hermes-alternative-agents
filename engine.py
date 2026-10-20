@@ -234,7 +234,8 @@ class Agent:
         """Queue a job and start the worker when idle; returns True when it waits behind a turn."""
         self.queue.append(job)
         if self.worker is None or self.worker.done():
-            self.worker = asyncio.get_running_loop().create_task(self._drain(), name=f"alternative-agents-{self.backend.name}")
+            self.worker = asyncio.get_running_loop().create_task(
+                self._drain(), name=f"alternative-agents-{self.backend.name}")
             return False
         if job.message_id and REACT_QUEUED:
             await react(job.message_id, REACT_QUEUED)
@@ -334,7 +335,8 @@ class Agent:
             "message": shown[:500], "response": ((run.result or {}).get("response") or "")[:2000],
             "status": "STOPPED" if run.stopped else (run.result or {}).get("status", "NO_RESULT"),
             "seconds": int(time.time() - run.started), "files": [p for p, _ in files],
-            "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens, **({"cost_usd": run.cost} if run.cost else {})})
+            "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens,
+            **({"cost_usd": run.cost} if run.cost else {})})
 
     async def _compose(self, jobs, verbose):
         """The message the agent receives, and the attachments copied to its inbox."""
@@ -597,7 +599,8 @@ class Agent:
         try:
             if sticky and not pinned:
                 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                leave = InlineKeyboardButton("Quitter", callback_data=BANNER_LEAVE + self.backend.name)
+                leave = InlineKeyboardButton(str(cfg["leave_button"] or "Back to Hermes"),
+                                             callback_data=BANNER_LEAVE + self.backend.name)
                 msg = await bot.send_message(chat_id=chat, text=self.mode_banner(),
                                              reply_markup=InlineKeyboardMarkup([[leave]]))
                 await bot.pin_chat_message(chat_id=chat, message_id=msg.message_id, disable_notification=True)
