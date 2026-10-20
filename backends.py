@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 MAX_ARG_PROMPT = 100_000  # Linux caps one argv string at 128 KiB
 _PARAM_KEYS = ("CommandLine", "AbsolutePath", "TargetFile", "Url", "Query", "SearchPath",
                "DirectoryPath", "Pattern", "Path")
+_OC_PARAM_KEYS = ("command", "filePath", "url", "pattern", "path", "name", "description", "prompt")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CLAUDE_PARAM_KEYS = ("command", "file_path", "url", "query", "pattern", "path", "skill", "description", "prompt")
 
 
@@ -59,6 +61,23 @@ class Backend:
 
     def finished(self, run):
         """Called after the turn, before its answer is sent."""
+
+    def unavailable(self):
+        """Why no turn can start (e.g. a missing key), or ""; checked before each run."""
+        return ""
+
+    def _with_context(self, run, message, conv):
+        """The message after the context block; blocking (reads Hermes' state)."""
+        state = self.store.load()
+        seen = state.get("context") if conv and (state.get("context") or {}).get("conversation_id") == conv else None
+        block, run.context = self.workspace.turn_context(seen)
+        return f"{block}\n\n{message}"
+
+    def _context_changes(self, run):
+        """The state change recording what the context block told this conversation."""
+        if run.context is not None and run.conversation_id and not run.side and not run.failed():
+            return {"context": {**run.context, "conversation_id": run.conversation_id}}
+        return {}
 
 
 class Agy(Backend):
@@ -259,11 +278,7 @@ class Claude(Backend):
     # ── a turn ──
 
     def prompt(self, run, message, conv):
-        """The message after the context block; blocking (reads Hermes' state)."""
-        state = self.store.load()
-        seen = state.get("context") if conv and (state.get("context") or {}).get("conversation_id") == conv else None
-        block, run.context = self.workspace.turn_context(seen)
-        return f"{block}\n\n{message}"
+        return self._with_context(run, message, conv)
 
     def command(self, run, prompt, conv, fork=False):
         ws = self.workspace
@@ -327,11 +342,9 @@ class Claude(Backend):
                           "error": errors or response or event.get("subtype") or "", "usage": usage}
 
     def finished(self, run):
-        changes = {}
+        changes = self._context_changes(run)
         if run.rate_limit:
             changes["rate_limit"] = {**run.rate_limit, "seen_at": time.time()}
-        if run.context is not None and run.conversation_id and not run.side and not run.failed():
-            changes["context"] = {**run.context, "conversation_id": run.conversation_id}
         if changes:
             self.store.update(**changes)
 
@@ -403,11 +416,251 @@ class Claude(Backend):
         return lines
 
 
+class OpenCode(Backend):
+    """opencode on DeepSeek, with a key of its own (never Hermes'): the env file's DEEPSEEK_API_KEY
+    reaches opencode through its environment only."""
+    name, prefix, label, product = "opencode", "oc", "opencode", "DeepSeek"
+    default_model = "deepseek/deepseek-flash"
+    default_mark = "🐋"
+    can_hear = False
+    can_fork = True
+    restart_notice = "Conversation lost"
+    PROVIDER = "deepseek"
+    BALANCE_URL = "https://api.deepseek.com/user/balance"
+    MODELS_TTL_S = 3600
+    # Kept away from the user's own opencode and Claude Code setup (config, AGENTS.md, CLAUDE.md, skills).
+    ISOLATION = {"OPENCODE_DISABLE_PROJECT_CONFIG": "1", "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+                 "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1", "OPENCODE_DISABLE_AUTOUPDATE": "1",
+                 "OPENCODE_DISABLE_SHARE": "1"}
+    _RESTART = re.compile(r"Session not found", re.I)
+    _TRANSIENT = re.compile(r"\b50[0-4]\b|overloaded|ECONNRESET|socket hang up|fetch failed|timed? ?out", re.I)
+    _BALANCE = re.compile(r"Insufficient Balance|\b402\b", re.I)
+    _AUTH = re.compile(r"\b401\b|Authentication|invalid api key|API key", re.I)
+    _QUOTA = re.compile(r"rate.?limit|\b429\b", re.I)
+
+    def __init__(self):
+        super().__init__()
+        self._models_cache = {"at": 0.0, "models": [], "variants": {}}
+        self.env_file = Path()
+
+    def configure(self):
+        super().configure()
+        self.bin = self._find_bin(cfg["opencode_path"], Path.home() / ".local/bin/opencode")
+        self.mark = str(cfg["opencode_mark"] or "")
+        self.env_file = Path(os.path.expanduser(str(cfg["opencode_env_file"] or "")))
+        self.store.default_model = self._full_id(cfg["opencode_model"] or self.default_model)
+        self.store.default_effort = cfg["opencode_effort"]
+        self.workspace = workspace.OpenCodeWorkspace(self, cfg["opencode_workspace"] or "~/opencode-chat")
+
+    def api_key(self):
+        """DEEPSEEK_API_KEY from the plugin's env file ("" when missing)."""
+        try:
+            lines = self.env_file.read_text().splitlines()
+        except OSError:
+            return ""
+        for line in lines:
+            key, sep, value = line.strip().removeprefix("export ").partition("=")
+            if sep and key.strip() == "DEEPSEEK_API_KEY":
+                return value.strip().strip("'\"")
+        return ""
+
+    def unavailable(self):
+        if not self.env_file.is_file():
+            return f"No DeepSeek key: {_home(str(self.env_file))} is missing (DEEPSEEK_API_KEY=…, mode 600)."
+        if not self.api_key():
+            return f"No DeepSeek key: DEEPSEEK_API_KEY is missing from {_home(str(self.env_file))}."
+        return ""
+
+    # ── a turn ──
+
+    def prompt(self, run, message, conv):
+        return self._with_context(run, message, conv)
+
+    def command(self, run, prompt, conv, fork=False):
+        cmd = [self.bin, "run", "--format", "json", "--dir", str(self.workspace.root), "--model", run.model, "--auto"]
+        if run.effort:
+            cmd += ["--variant", run.effort]
+        if conv:
+            cmd += ["--session", conv] + (["--fork"] if fork else [])
+        else:
+            # A title of its own: opencode would otherwise ask the model for one, from the message.
+            cmd += ["--title", f"Telegram {datetime.now():%Y-%m-%d %H:%M}"]
+        return cmd, prompt  # through stdin: no argv size limit, nothing in `ps`
+
+    def env(self, base):
+        env = {k: v for k, v in base.items() if not k.startswith(("DEEPSEEK_", "OPENCODE_"))}
+        env.update(self.ISOLATION, OPENCODE_CONFIG_DIR=str(self.workspace.config_dir))
+        key = self.api_key()
+        if key:
+            env["DEEPSEEK_API_KEY"] = key
+        return env
+
+    def on_event(self, run, event):
+        kind, part = event.get("type"), event.get("part") or {}
+        if event.get("sessionID") and not run.conversation_id:
+            run.conversation_id = event["sessionID"]
+        if kind == "step_start":
+            run.step += 1
+        elif kind == "text" and part.get("text"):
+            # A text part arrives whole once written; a step may hold several.
+            said = run.text.get(run.step, "")
+            run.text[run.step] = f"{said}\n\n{part['text']}" if said else part["text"]
+            run.last_step = run.step
+            run.changed = True
+        elif kind == "tool_use":
+            state = part.get("state") or {}
+            desc = _describe(part.get("tool"), state.get("input") or {}, _OC_PARAM_KEYS)
+            run.actions.append(f"{'✗' if state.get('status') == 'error' else '✓'} {desc}")
+            run.changed = True
+        elif kind == "step_finish":
+            tokens = part.get("tokens") or {}
+            run.tokens += int(tokens.get("total") or 0)
+            run.cost += float(part.get("cost") or 0)
+            if part.get("reason") != "tool-calls":
+                run.result = {"status": "SUCCESS", "response": run.text.get(run.step, "").strip(), "error": "",
+                              "usage": tokens}
+        elif kind == "error":
+            error = event.get("error") or {}
+            data = error.get("data") or {}
+            text = str(data.get("message") or error.get("name") or "error")
+            if data.get("statusCode"):
+                text += f" (HTTP {data['statusCode']})"
+            run.result = {"status": "ERROR", "response": "", "error": text}
+
+    def finished(self, run):
+        changes = self._context_changes(run)
+        if changes:
+            self.store.update(**changes)
+
+    def restart_fresh(self, error):
+        return bool(self._RESTART.search(error))
+
+    def transient(self, error):
+        return bool(self._TRANSIENT.search(error)) and not self._BALANCE.search(error)
+
+    def hint(self, error):
+        if self._BALANCE.search(error):
+            return "DeepSeek balance used up? /oc_usage shows it; top it up on platform.deepseek.com."
+        if self._AUTH.search(error):
+            return f"DeepSeek key refused: check DEEPSEEK_API_KEY in {_home(str(self.env_file))}."
+        if self._QUOTA.search(error):
+            return "DeepSeek rate limit: /oc_retry in a moment."
+        if self._TRANSIENT.search(error):
+            return "DeepSeek's API is struggling: /oc_retry in a moment."
+        return ""
+
+    # ── models ──
+
+    def _full_id(self, model):
+        return model if "/" in model else f"{self.PROVIDER}/{model}"
+
+    def _catalog(self):
+        """(models, {model: [variants]}) from `opencode models deepseek --verbose`, cached for an hour."""
+        cache = self._models_cache
+        if time.time() - cache["at"] < self.MODELS_TTL_S and cache["models"]:
+            return cache["models"], cache["variants"]
+        try:
+            out = subprocess.run([self.bin, "models", self.PROVIDER, "--verbose"], capture_output=True, text=True,
+                                 timeout=60, stdin=subprocess.DEVNULL, env=self.env(dict(os.environ))).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return cache["models"], cache["variants"]
+        models, variants, decoder, pos = [], {}, json.JSONDecoder(), 0
+        while True:  # "<provider>/<model>" lines, each followed by its JSON description
+            line_end = out.find("\n", pos)
+            if line_end == -1:
+                break
+            model, pos = out[pos:line_end].strip(), line_end + 1
+            if not model:
+                continue
+            try:
+                info, pos = decoder.raw_decode(out, pos)
+            except ValueError:
+                break
+            models.append((model, str(info.get("name") or model)))
+            variants[model] = list(info.get("variants") or {})
+        if models:
+            cache.update(at=time.time(), models=models, variants=variants)
+        return models, variants
+
+    def models(self):
+        return self._catalog()[0]
+
+    def short_model(self, label):
+        return label.replace("DeepSeek ", "")
+
+    def check_model(self, choice):
+        return super().check_model(self._full_id(choice))
+
+    def efforts(self, state):
+        levels = self._catalog()[1].get(self.store.model(state)) or []
+        return self.store.effort(state) or "default", {level: {"effort": level} for level in levels}
+
+    def side_settings(self, state):
+        _current, levels = self.efforts(state)
+        return self.store.model(state), "low" if "low" in levels else ""
+
+    # ── usage and checks ──
+
+    def balance(self):
+        """{currency: total} left on the DeepSeek account; raises on failure."""
+        import urllib.request
+        request = urllib.request.Request(self.BALANCE_URL, headers={"Authorization": f"Bearer {self.api_key()}",
+                                                                    "Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = json.loads(response.read())
+        return {b.get("currency", "?"): b.get("total_balance", "?") for b in data.get("balance_infos") or ()}
+
+    def quota(self):
+        reason = self.unavailable()
+        if reason:
+            return f"DeepSeek balance: unknown. {reason}"
+        try:
+            left = self.balance()
+        except Exception as e:
+            return f"DeepSeek balance: unavailable ({type(e).__name__})"
+        return "DeepSeek balance: " + (" · ".join(f"{total} {currency}" for currency, total in left.items()) or "?")
+
+    def checks(self):
+        try:
+            out = subprocess.run([self.bin, "--version"], capture_output=True, text=True, timeout=20,
+                                 stdin=subprocess.DEVNULL)
+            lines = [f"✓ opencode {out.stdout.strip() or '?'}"]
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return [f"✗ opencode missing or silent ({self.bin}): {e}"]
+        reason = self.unavailable()
+        if reason:
+            return lines + [f"✗ {reason}"]
+        try:
+            mode = self.env_file.stat().st_mode & 0o777
+        except OSError:
+            mode = 0
+        lines.append(f"✓ DeepSeek key in {_home(str(self.env_file))}"
+                     + ("" if mode & 0o077 == 0 else f" (⚠️ mode {oct(mode)[2:]}: chmod 600 it)"))
+        try:
+            left = self.balance()
+            empty = not any(_positive(total) for total in left.values())
+            lines.append(("✗ DeepSeek balance used up: " if empty else "✓ DeepSeek balance: ")
+                         + " · ".join(f"{total} {currency}" for currency, total in left.items()))
+        except Exception as e:
+            lines.append(f"✗ DeepSeek balance unavailable ({type(e).__name__}: {e})")
+        self.workspace.root.mkdir(parents=True, exist_ok=True)
+        try:
+            out = subprocess.run([self.bin, "debug", "config"], capture_output=True, text=True, timeout=60,
+                                 cwd=str(self.workspace.root), stdin=subprocess.DEVNULL, env=self.env(dict(os.environ)))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return lines + [f"✗ `opencode debug config` failed: {e}"]
+        try:
+            json.loads(out.stdout)
+        except ValueError:
+            return lines + [f"✗ opencode rejects its config: {_cut(_ANSI.sub('', out.stderr or out.stdout), 300)}"]
+        return lines + [f"✓ opencode config valid ({_home(str(self.workspace.config_file))})"]
+
+
 def make(names):
     """{name: backend} for the enabled backends, configured."""
     out = {}
     for name in names:
-        backend = {"agy": Agy, "claude": Claude}[name]()
+        backend = {"agy": Agy, "claude": Claude, "opencode": OpenCode}[name]()
         backend.configure()
         out[name] = backend
     return out
@@ -438,6 +691,13 @@ def _local_ts(ts):
 def _short_time(when):
     when = when.astimezone(workspace.local_tz())
     return f"{when:%H:%M}" if when.date() == workspace.local_now().date() else f"{when:%a %H:%M}"
+
+
+def _positive(amount):
+    try:
+        return float(amount) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _home(text):

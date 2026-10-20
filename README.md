@@ -1,10 +1,11 @@
 # hermes-alternative-agents
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin to talk to
-[Antigravity](https://antigravity.google/) (`agy`, Google's agent CLI) or
-[Claude Code](https://code.claude.com/) from Telegram, as an alternative to Hermes' own LLM.
-Messages routed to an agent are taken before Hermes' dispatch: they cost no Hermes LLM tokens,
-only your Antigravity or Claude subscription.
+[Antigravity](https://antigravity.google/) (`agy`, Google's agent CLI),
+[Claude Code](https://code.claude.com/) or [opencode](https://opencode.ai/) on DeepSeek from
+Telegram, as an alternative to Hermes' own LLM. Messages routed to an agent are taken before
+Hermes' dispatch: they cost no Hermes LLM tokens, only your Antigravity or Claude subscription, or
+opencode's own DeepSeek key.
 
 The agents are not bare CLIs behind a bot: before every turn the plugin hands them what Hermes
 knows — Hermes' personality, memory and recent Telegram thread, its skills, its MCP servers —
@@ -14,13 +15,13 @@ writing, cron jobs, text-to-speech, Telegram messages). Each of these can be tur
 It also brings what makes an agent more than a chat: scheduled tasks that an agent runs instead
 of Hermes' paid LLM, voice replies, and handing a conversation over from Hermes to an agent and back.
 
-Enable the agents you want with the `backends` setting (`[agy]` by default, `[agy, claude]` for
-both). Each has its own commands — `/agy…` for agy, `/cc…` for Claude Code — conversations and
-settings.
+Enable the agents you want with the `backends` setting (`[agy]` by default, `[agy, claude, opencode]`
+for all three). Each has its own commands — `/agy…` for agy, `/cc…` for Claude Code, `/oc…` for
+opencode — conversations and settings.
 
 ## What reaches an agent
 
-Only from the one Telegram chat you configure (examples with agy; `/cc…` works the same for Claude Code):
+Only from the one Telegram chat you configure (examples with agy; `/cc…` and `/oc…` work the same):
 
 | You send | Goes to |
 |---|---|
@@ -34,13 +35,13 @@ One mode at a time: `/cc_on` turns agy mode off, and the other way round. A repl
 agent you reply to, whatever the mode.
 
 Photos, files and voice notes ride along. Voice notes go to agy as audio (default) or are
-transcribed locally by Hermes' Whisper first (`/agy_voice local`); Claude Code takes no audio, so
-they are always transcribed for it. Messages sent while an agent works are queued and handed over
+transcribed locally by Hermes' Whisper first (`/agy_voice local`); Claude Code and opencode take no
+audio, so they are always transcribed for them. Messages sent while an agent works are queued and handed over
 together.
 
 ## Commands
 
-The `/cc_…` commands are the same for Claude Code.
+The `/cc_…` (Claude Code) and `/oc_…` (opencode) commands are the same.
 
 | Command | |
 |---|---|
@@ -59,7 +60,7 @@ The `/cc_…` commands are the same for Claude Code.
 | `/agy_handoff [message]` | Hand the Hermes conversation over to agy (agy mode on, seeded with the thread) |
 | `/agy_back [message]` | Back to Hermes, which gets a recap of the agy conversation |
 | `/agy_task` | List agy's scheduled tasks; `add <when> \| <prompt>`, `rm <n>`, `run <n>` |
-| `/agy_usage` | Antigravity quota left (weekly and 5-hour limits, like agy's `/usage`), then turns, tokens and time through the plugin. `/cc_usage`: the Claude subscription's 5-hour and weekly limits as the last turn reported them |
+| `/agy_usage` | Antigravity quota left (weekly and 5-hour limits, like agy's `/usage`), then turns, tokens and time through the plugin. `/cc_usage`: the Claude subscription's 5-hour and weekly limits as the last turn reported them; `/oc_usage`: the DeepSeek balance |
 | `/agy_doctor` | Check every link of the chain |
 
 ## Claude Code
@@ -77,11 +78,40 @@ Its commits carry no Claude attribution. `AskUserQuestion`, plan mode and Claude
 session-bound scheduling tools are off (nobody answers mid-turn, the process ends with the turn):
 `/cc_task` and the `cc_task` tool schedule its work.
 
+## opencode (DeepSeek)
+
+opencode runs on DeepSeek (`deepseek/deepseek-flash` by default; `/oc_model` lists DeepSeek's models,
+`/oc_effort` picks a model variant: `low`, `high`, `max`). It pays with a key of its own, never
+Hermes': put it in `~/.hermes/alternative-agents/.env` (setting `opencode_env_file`), mode 600:
+
+```bash
+mkdir -m 700 -p ~/.hermes/alternative-agents
+install -m 600 /dev/null ~/.hermes/alternative-agents/.env
+echo 'DEEPSEEK_API_KEY=sk-…' >> ~/.hermes/alternative-agents/.env
+```
+
+The key reaches opencode through its environment only (never `opencode.json`), and DeepSeek keys
+from the gateway's environment are removed. Without the file or the variable, `/oc` says so and runs
+nothing; `/oc_doctor` checks the key and the balance.
+
+opencode runs apart from your own opencode setup: `OPENCODE_CONFIG_DIR` points it at
+`<opencode_workspace>/.hermes/` instead of `~/.config/opencode`, project config is off, and so is what
+it would read of Claude Code's (`~/.claude/CLAUDE.md`, `~/.claude/skills`, `~/.agents/skills`). That
+directory gets an `opencode.json` (the MCP servers: the bridge and Hermes' own), an `AGENTS.md` (this
+channel's rules, the tools, Hermes' personality) and `skills/`, links to Hermes' skills. Like Claude
+Code, the time, Hermes' memory and new messages of your thread with Hermes open the message when they
+changed. Messages go through stdin (no size limit, nothing in `ps`), and it runs with `--auto`: no
+permission prompts.
+
+Measured with opencode 1.18.35: a turn costs a fixed ~30 KB of context (opencode's system prompt
+~9 KB, its tool descriptions ~21 KB) on top of this plugin's context and the conversation.
+
 ## Scheduled tasks
 
 `/agy_task add every day at 8am | summarize my unread mails` schedules a prompt that agy runs
 unattended; its answer arrives in Telegram. agy can also schedule its own tasks with the
-`agy_task` tool ("every Monday, check …"). `/cc_task` and `cc_task` do the same for Claude Code.
+`agy_task` tool ("every Monday, check …"). `/cc_task` and `cc_task`, `/oc_task` and `oc_task` do the
+same for Claude Code and opencode.
 
 Hermes keeps the schedule: each task is a Hermes cron job in `no_agent` mode whose script, generated
 under `<HERMES_HOME>/scripts/agy-tasks/`, runs the agent. So it costs no Hermes LLM tokens, it shows up in
@@ -96,6 +126,10 @@ read in Hermes' timezone (`timezone` in `config.yaml`; empty means the machine's
   gateway, and logged in once (run `agy` interactively on the machine).
 - For Claude Code: the [Claude Code CLI](https://code.claude.com/) installed for that user and logged
   in to a Claude subscription once (`claude`, then `/login`).
+- For opencode: the [opencode CLI](https://opencode.ai/) (tested with 1.18.35:
+  `npm install --prefix ~/.local/share/opencode-cli opencode-ai@1.18.35`, then link
+  `~/.local/share/opencode-cli/node_modules/.bin/opencode` into `~/.local/bin`) and a DeepSeek key of its own
+  (see [opencode](#opencode-deepseek)).
 
 ## Install
 
@@ -103,7 +137,7 @@ read in Hermes' timezone (`timezone` in `config.yaml`; empty means the machine's
 hermes plugins install emilienrk/hermes-alternative-agents --enable
 hermes config set plugins.entries.alternative-agents.settings.chat_id <your Telegram chat id>
 hermes config set plugins.entries.alternative-agents.settings.user_name <your name>
-hermes config set plugins.entries.alternative-agents.settings.backends '[agy, claude]'   # optional: Claude Code too
+hermes config set plugins.entries.alternative-agents.settings.backends '[agy, claude, opencode]'   # optional
 ```
 
 `chat_id` is your private chat with the bot, whose id is your Telegram user id: the one already in
@@ -114,7 +148,7 @@ Then:
 1. For agy, add its workspace (`~/agy-chat` by default) to `trustedWorkspaces` in
    `~/.gemini/antigravity-cli/settings.json`, so agy loads the generated rules and MCP servers.
 2. Optionally, put the commands in Telegram's `/` menu, in `config.yaml` (add `cc`, `cc_on`… for
-   Claude Code):
+   Claude Code, `oc`, `oc_on`… for opencode):
    ```yaml
    platforms:
      telegram:
@@ -124,7 +158,7 @@ Then:
                       agy_voice, agy_conv, agy_retry, agy_btw, agy_handoff, agy_back, agy_task,
                       agy_usage, agy_doctor]
    ```
-3. Restart the gateway, then send `/agy_doctor` (or `/cc_doctor`) in Telegram.
+3. Restart the gateway, then send `/agy_doctor` (or `/cc_doctor`, `/oc_doctor`) in Telegram.
 
 Update with `hermes plugins update alternative-agents`, then restart the gateway.
 
@@ -136,7 +170,7 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 |---|---|---|
 | `chat_id` | — | **Required.** The only Telegram chat routed to the agents. Nothing is routed while it's empty. |
 | `user_name` | `the user` | How the agents' context refers to you. |
-| `backends` | `[agy]` | Agents reachable from Telegram: `agy`, `claude`. |
+| `backends` | `[agy]` | Agents reachable from Telegram: `agy`, `claude`, `opencode`. |
 | `machine_notes` | — | Free text about the machine added to the agents' context. |
 | `skip_skills` | `[]` | Hermes skill names hidden from the agents. |
 | `timeout_minutes` | `30` | Longest turn. |
@@ -151,38 +185,47 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | `claude_model` | `opus` | Model until `/cc_model` picks another: an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full id. |
 | `claude_effort` | `""` | Effort until `/cc_effort` picks another (`""`: Claude Code's default). |
 | `claude_mark` | `✳️` | Emoji in Claude Code's footer, status and banner. |
+| **opencode** | | |
+| `opencode_path` | `opencode` on `PATH`, else `~/.local/bin/opencode` | The opencode CLI. |
+| `opencode_workspace` | `~/opencode-chat` | opencode's working directory: `inbox/`, `out/`, `.hermes/` (generated). |
+| `opencode_model` | `deepseek/deepseek-flash` | Model until `/oc_model` picks another. |
+| `opencode_effort` | `""` | Model variant until `/oc_effort` picks another (`""`: the model's default). |
+| `opencode_mark` | `🐋` | Emoji in opencode's footer, status and banner. |
+| `opencode_env_file` | `~/.hermes/alternative-agents/.env` | Holds `DEEPSEEK_API_KEY`, opencode's own key. |
 | **Display** | | |
 | `react_working`, `react_queued` | `👀`, `✍` | Reactions on your messages while an agent works / while they wait (`""` for none). |
 | `footer` | `true` | `— 🛸 agy · 2 min` under answers. |
 | `verbose` | `false` | Live status of the agent's actions by default. |
 | **Voice** | | |
-| `voice_input` | `direct` | `direct`: the audio goes to agy (Google); `local`: Hermes' Whisper transcribes it first. Claude Code always gets `local`. |
+| `voice_input` | `direct` | `direct`: the audio goes to agy (Google); `local`: Hermes' Whisper transcribes it first. Claude Code and opencode always get `local`. |
 | `voice_reply` | `off` | `off`, `mirror` (voice answer when you sent a voice note), `always`. |
 | `tts_provider` | `""` | `""`: Hermes' TTS settings; `edge`: Edge TTS directly (free, no key; needs `edge-tts` ≥ 7.2.8 in Hermes' venv, older ones get a 403). |
 | `tts_voice` | Hermes' `tts.edge.voice` | Edge voice, e.g. `fr-FR-DeniseNeural`. |
 | **What the agents get from Hermes** | | |
 | `share_soul`, `share_memory`, `share_thread` | `true` | Personality, memory, recent Telegram thread, in the agents' context. |
 | `share_skills`, `share_mcp_servers` | `true` | Hermes' skills and MCP servers. |
-| `bridge_tools` | all | Tools of the bundled bridge: `memory`, `session_search`, `skill_manage`, `cronjob_manage`, `text_to_speech`, `telegram_send`, `hermes_thread`, `tasks` (`agy_task` / `cc_task`). `[]` turns it off. |
+| `bridge_tools` | all | Tools of the bundled bridge: `memory`, `session_search`, `skill_manage`, `cronjob_manage`, `text_to_speech`, `telegram_send`, `hermes_thread`, `tasks` (`agy_task` / `cc_task` / `oc_task`). `[]` turns it off. |
 
-`/agy_verbose`, `/agy_voice` (and `/cc_…`) override the display and voice defaults from Telegram, per agent.
+`/agy_verbose`, `/agy_voice` (and `/cc_…`, `/oc_…`) override the display and voice defaults from Telegram, per agent.
 
 The agents' context is written in English; they answer in your language.
 
 ## Security
 
 The agents run as the gateway's user without permission prompts (agy with
-`--dangerously-skip-permissions`, Claude Code with `--permission-mode bypassPermissions`): **whoever
+`--dangerously-skip-permissions`, Claude Code with `--permission-mode bypassPermissions`, opencode with
+`--auto`): **whoever
 can write in the configured chat can run anything that user can**. Set `chat_id` to your own DM with
 the bot, and think twice before running the gateway as a user with `sudo`. API keys from the
 gateway's environment are not passed to the agents, but their MCP configs hold the bearer tokens of
-Hermes' MCP servers (written with mode 600).
+Hermes' MCP servers (written with mode 600). opencode's DeepSeek key is in its environment, so the
+commands it runs can read it.
 
 ## Data
 
 Plugin state (mode, model, conversation, tasks) and the turn logs live in
 `<HERMES_HOME>/plugin-data/alternative-agents/` (`state.json` and `turns.log` for agy, `claude-state.json` and
-`claude-turns.log` for Claude Code), outside the install directory, so updates keep them.
+`claude-turns.log` for Claude Code, `opencode-…` for opencode), outside the install directory, so updates keep them.
 
 The plugin was called `agy-chat`. Coming from it: stop the gateway, move
 `plugin-data/agy-chat/` to `plugin-data/alternative-agents/` and `plugins/agy-chat/` to
@@ -193,7 +236,7 @@ which ran `plugins/agy-chat/task_run.py`.
 ## Development
 
 The tests drive whole turns against a fake agy (`tests/fake_agy.py`), a fake Claude Code
-(`tests/fake_claude.py`) and a fake Telegram adapter.
+(`tests/fake_claude.py`), a fake opencode (`tests/fake_opencode.py`) and a fake Telegram adapter.
 They import Hermes' gateway modules, so run them with Hermes' interpreter:
 
 ```bash

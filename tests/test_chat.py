@@ -36,8 +36,9 @@ workspace = sys.modules["alt_agents_under_test.workspace"]
 config = sys.modules["alt_agents_under_test.config"]
 backends = sys.modules["alt_agents_under_test.backends"]
 CHAT = "424242"
-SETTINGS = {"chat_id": CHAT, "user_name": "Alex", "backends": ["agy", "claude"]}
-FAKES = {"agy": str(TESTS_DIR / "fake_agy.py"), "claude": str(TESTS_DIR / "fake_claude.py")}
+SETTINGS = {"chat_id": CHAT, "user_name": "Alex", "backends": ["agy", "claude", "opencode"]}
+FAKES = {"agy": str(TESTS_DIR / "fake_agy.py"), "claude": str(TESTS_DIR / "fake_claude.py"),
+         "opencode": str(TESTS_DIR / "fake_opencode.py")}
 
 
 def ok(message_id=None):
@@ -137,7 +138,9 @@ class Base(unittest.IsolatedAsyncioTestCase):
             backend.workspace.prepare = lambda: {}
             backend.store.state_file = self.tmp / f"{name}-state.json"
             backend.store.turns_log = self.tmp / f"{name}-turns.log"
-        self.agy, self.claude = engine.AGENTS["agy"], engine.AGENTS["claude"]
+        self.agy, self.claude, self.oc = engine.AGENTS["agy"], engine.AGENTS["claude"], engine.AGENTS["opencode"]
+        self.oc.backend.env_file = self.tmp / "alternative-agents.env"
+        self.oc.backend.env_file.write_text("# dedicated key\nDEEPSEEK_API_KEY='sk-test'\n")
         engine.TYPING_EVERY_S, engine.STATUS_EVERY_S = 0.2, 0.3
         engine._transcribe = lambda path: "transcription du vocal"
         for f in ("calls.jsonl", "mode.txt", "media.txt"):
@@ -175,6 +178,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
         config.cfg.update(values)
         engine.configure({name: agent.backend for name, agent in engine.AGENTS.items()})
         self.agy, self.claude = engine.AGENTS["agy"], engine.AGENTS["claude"]
+        self.oc = engine.AGENTS.get("opencode")
 
 
 class RoutingTests(Base):
@@ -245,6 +249,7 @@ class RoutingTests(Base):
     async def test_disabled_backend_is_not_routed(self):
         self.set(backends=["agy"])
         engine.AGENTS.pop("claude")
+        engine.AGENTS.pop("opencode")
         self.assertIsNone(plugin.route(event("/cc salut"), {"agy": {}}))
 
 
@@ -624,6 +629,138 @@ class ClaudeTests(Base):
         self.assertIn("✓ Claude Code logged in (claude.ai, pro plan)", report)
 
 
+class OpenCodeTests(Base):
+    async def finish(self, timeout=20, agent=None):
+        await super().finish(timeout, agent or self.oc)
+
+    async def test_turn_and_resume(self):
+        store = self.oc.store
+        await self.dispatch(event("/oc liste mes projets", msg_id="7"))
+        await self.finish()
+        reply = self.adapter.sent()[-1]
+        self.assertIn("Voir main.py.\n\nECHO:", reply[1])  # the last step's text parts
+        self.assertNotIn("Je regarde", reply[1])
+        self.assertIn("— 🐋 opencode", reply[1])
+        call = self.calls()[0]
+        args = call["args"]
+        self.assertEqual(args[:3], ["run", "--format", "json"])
+        self.assertEqual(args[args.index("--model") + 1], "deepseek/deepseek-flash")
+        self.assertIn("--auto", args)
+        self.assertIn("--title", args)  # no title request to the model
+        self.assertNotIn("--variant", args)
+        self.assertNotIn("liste mes projets", " ".join(args))  # the message goes through stdin
+        self.assertEqual(call["env"], {"DEEPSEEK_API_KEY": "sk-test", "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+                                       "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+                                       "OPENCODE_CONFIG_DIR": str(self.oc.backend.workspace.config_dir)})
+        self.assertIsNone(call["conversation"])
+        self.assertTrue(call["prompt"].startswith("[Context from the plugin]\nNow: "))
+        self.assertIn("likes tea", call["prompt"])
+        self.assertTrue(call["prompt"].endswith("liste mes projets"))
+        state = store.load()
+        conv = state["conversation_id"]
+        self.assertTrue(conv.startswith("ses_"))
+        self.assertEqual(state["context"]["conversation_id"], conv)
+        log = json.loads(store.turns_log.read_text().splitlines()[-1])
+        self.assertEqual((log["status"], log["tokens"], log["actions"]), ("SUCCESS", 2580, ["✓ bash ls ~/projects"]))
+        self.assertAlmostEqual(log["cost_usd"], 0.0005)
+
+        await self.dispatch(event("/oc et ensuite ?", msg_id="8"))
+        await self.finish()
+        second = self.calls()[1]
+        self.assertEqual((second["conversation"], second["fork"]), (conv, False))
+        self.assertNotIn("--title", second["args"])
+        self.assertNotIn("likes tea", second["prompt"])
+
+    async def test_no_key_no_run(self):
+        self.oc.backend.env_file.unlink()
+        await self.dispatch(event("/oc salut", msg_id="7"))
+        await self.finish()
+        self.assertEqual(self.calls(), [])
+        reply = self.adapter.sent()[-1][1]
+        self.assertIn("No DeepSeek key", reply)
+        self.assertIn("alternative-agents.env is missing", reply)
+        self.oc.backend.env_file.write_text("OTHER=1\n")
+        self.assertIn("DEEPSEEK_API_KEY is missing", self.oc.backend.unavailable())
+        self.assertIn("✗ No DeepSeek key", "\n".join(self.oc.backend.checks()))
+
+    async def test_hermes_keys_never_reach_opencode(self):
+        env = self.oc.backend.env({"PATH": "/bin", "DEEPSEEK_API_KEY": "sk-hermes", "OPENCODE_CONFIG": "/x"})
+        self.assertEqual(env["DEEPSEEK_API_KEY"], "sk-test")
+        self.assertNotIn("OPENCODE_CONFIG", env)
+        self.oc.backend.env_file.unlink()
+        self.assertNotIn("DEEPSEEK_API_KEY", self.oc.backend.env({"DEEPSEEK_API_KEY": "sk-hermes"}))
+
+    async def test_effort_model_and_usage(self):
+        self.assertIsNone(await plugin._cmd_effort(self.oc, ""))  # picker of the model's variants
+        self.assertEqual([c["label"] for c in self.adapter.sent("picker")[0][2]], ["low", "high", "max"])
+        self.assertEqual(await plugin._cmd_effort(self.oc, "high"), "opencode effort → high")
+        self.assertIn("Unknown model", await plugin._cmd_model(self.oc, "gpt-9"))
+        self.assertEqual(await plugin._cmd_model(self.oc, "deepseek-v4-pro"), "opencode model → deepseek/deepseek-v4-pro")
+        self.oc.backend.balance = lambda: {"USD": "1.98"}
+        await self.dispatch(event("/oc salut", msg_id="7"))
+        await self.finish()
+        args = self.calls()[0]["args"]
+        self.assertEqual(args[args.index("--model") + 1], "deepseek/deepseek-v4-pro")
+        self.assertEqual(args[args.index("--variant") + 1], "high")
+        usage = await plugin._cmd_usage(self.oc, "")
+        self.assertIn("DeepSeek balance: 1.98 USD", usage)
+        self.assertIn("1 turns · 2k tokens ($0.00 at API prices)", usage)
+
+    async def test_verbose_status_shows_tools(self):
+        self.oc.store.update(verbose=True)
+        self.mode("verbose")
+        await self.dispatch(event("/oc build", msg_id="5"))
+        await self.finish(30)
+        status = self.adapter.sent()[0]
+        self.assertTrue(status[1].startswith("🐋 opencode working"))
+        self.assertIn("💬 Je regarde.", status[1])
+        final_edit = [c for c in self.adapter.calls if c[0] == "edit" and c[3]][-1]
+        self.assertIn("✓ bash ls ~/projects", final_edit[2])
+
+    async def test_lost_session_restarts_fresh(self):
+        store = self.oc.store
+        store.update(conversation_id="ses_gone")
+        store.log_turn({"conversation_id": "ses_gone", "message": "avant", "response": "réponse d'avant"})
+        self.mode("missing")
+        await self.dispatch(event("/oc continue", msg_id="1"))
+        await self.finish()
+        calls = self.calls()
+        self.assertEqual([c["conversation"] for c in calls], ["ses_gone", None])
+        self.assertIn("réponse d'avant", calls[1]["prompt"])
+        self.assertIn("♻️ Conversation lost", self.adapter.sent()[-1][1])
+
+    async def test_balance_hint(self):
+        self.mode("balance")
+        await self.dispatch(event("/oc salut", msg_id="1"))
+        await self.finish()
+        reply = self.adapter.sent()[-1][1]
+        self.assertIn("❌ opencode ERROR: Insufficient Balance (HTTP 402)", reply)
+        self.assertIn("/oc_usage", reply)
+        self.assertEqual(len(self.calls()), 1)  # not retried
+
+    async def test_btw_forks_the_main_conversation(self):
+        await self.dispatch(event("/oc travail", msg_id="1"))
+        await self.finish()
+        main = self.oc.store.load()["conversation_id"]
+        await self.dispatch(event("/oc_btw vite ?", msg_id="2"))
+        await BtwTests.finish_btw(self)
+        btw = self.calls()[-1]
+        self.assertEqual((btw["conversation"], btw["fork"]), (main, True))
+        self.assertEqual(btw["args"][btw["args"].index("--variant") + 1], "low")
+        self.assertEqual(self.oc.store.load()["conversation_id"], main)
+
+    async def test_doctor(self):
+        self.oc.backend.balance = lambda: {"USD": "0.00"}
+        ws = self.oc.backend.workspace
+        ws.config_dir.mkdir(parents=True, exist_ok=True)
+        ws.config_file.write_text(json.dumps({"mcp": {}}))
+        report = await plugin._cmd_doctor(self.oc, "")
+        self.assertIn("✓ opencode 9.9.9", report)
+        self.assertIn("✓ DeepSeek key in ", report)
+        self.assertIn("✗ DeepSeek balance used up: 0.00 USD", report)
+        self.assertIn("✓ opencode config valid", report)
+
+
 class CommandTests(Base):
     async def test_status_card_and_modes(self):
         card = await plugin._cmd_status(self.agy, "")
@@ -685,7 +822,8 @@ class CommandTests(Base):
         self.assertIn("agy-btw", names)
         self.assertIn("cc", names)
         self.assertIn("cc-handoff", names)
-        self.assertEqual(len(names), 2 * len(plugin.COMMANDS))
+        self.assertIn("oc-usage", names)
+        self.assertEqual(len(names), 3 * len(plugin.COMMANDS))
 
 
 class SettingsTests(Base):
@@ -884,7 +1022,9 @@ class AgentTests(Base):
         import subprocess
         hermes = self.tmp / "hermes"
         (hermes / "config.yaml").write_text(json.dumps({"plugins": {"entries": {"alternative-agents": {"settings": {
-            "user_name": "Alex", "claude_path": FAKES["claude"], "claude_workspace": str(self.tmp / "cw")}}}}}))
+            "user_name": "Alex", "claude_path": FAKES["claude"], "claude_workspace": str(self.tmp / "cw"),
+            "opencode_path": FAKES["opencode"], "opencode_workspace": str(self.tmp / "ow"),
+            "opencode_env_file": str(self.oc.backend.env_file)}}}}}))
         env = {**os.environ, "HERMES_HOME": str(hermes)}
         return subprocess.run([sys.executable, str(PLUGIN_DIR / runner), json.dumps(task)],
                               capture_output=True, text=True, env=env, timeout=60)
@@ -925,6 +1065,14 @@ class AgentTests(Base):
         self.assertIn("unattended", call["prompt"])
         self.assertIn("[Context from the plugin]", call["prompt"])
         self.assertIsNone(call["conversation"])
+
+    async def test_opencode_task_run(self):
+        out = self.run_task({"backend": "opencode", "name": "point", "prompt": "fais le point", "model": ""})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(out.stdout.startswith("🐋 opencode · point\n\n"), out.stdout)
+        call = self.calls()[0]
+        self.assertIn("unattended", call["prompt"])
+        self.assertEqual(call["env"]["DEEPSEEK_API_KEY"], "sk-test")
 
 
 class WorkspaceTests(Base):
@@ -982,6 +1130,29 @@ class WorkspaceTests(Base):
         self.assertEqual(json.loads(servers["hermes"]["env"]["ALT_AGENTS_TASK"])["prefix"], "cc")
         self.assertEqual(oct(ws.mcp_config.stat().st_mode & 0o777), "0o600")
         self.assertTrue((ws.plugin / ".claude-plugin" / "plugin.json").exists())
+
+    async def test_opencode_workspace(self):
+        home = workspace.HERMES_HOME
+        skill = home / "skills" / "devops" / "deploy"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: deploy\ndescription: deploy things\n---\nbody")
+        (home / "config.yaml").write_text(json.dumps({"mcp_servers": {
+            "stats": {"url": "https://x.y/mcp", "headers": {"Authorization": "Bearer t"}}}}))
+        ws = workspace.OpenCodeWorkspace(self.oc.backend, self.tmp / "ow")
+        summary = ws.prepare()
+        self.assertEqual(summary["errors"], [])
+        config = json.loads(ws.config_file.read_text())
+        self.assertEqual(sorted(config["mcp"]), ["hermes", "stats"])
+        self.assertEqual(config["mcp"]["stats"], {"type": "remote", "url": "https://x.y/mcp",
+                                                  "headers": {"Authorization": "Bearer t"}})
+        self.assertEqual(config["mcp"]["hermes"]["type"], "local")
+        self.assertNotIn("sk-test", ws.config_file.read_text())
+        self.assertEqual(oct(ws.config_file.stat().st_mode & 0o777), "0o600")
+        self.assertEqual(ws.bridge_config()["args"], [str(workspace.BRIDGE)])
+        rules = ws.rules_file.read_text()
+        for text in ("You are opencode", "`oc_task`", "`skill` tool", "[Context from the plugin]"):
+            self.assertIn(text, rules)
+        self.assertEqual((ws.skills_dir / "deploy").resolve(), skill.resolve())
 
 
 def datetime_now():

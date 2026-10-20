@@ -1,6 +1,7 @@
-"""Talk to Antigravity (agy) or Claude Code from Telegram: alternatives to Hermes' paid LLM.
+"""Talk to Antigravity (agy), Claude Code or opencode (DeepSeek) from Telegram: alternatives to Hermes' LLM.
 
-What reaches an agent (the configured chat only), with /agy… for agy and /cc… for Claude Code:
+What reaches an agent (the configured chat only), with /agy… for agy, /cc… for Claude Code and /oc…
+for opencode:
   a reply            to one of the agent's messages
   everything         while its mode is on (/agy_on, /cc_on … /agy_off, /cc_off, shown by a pinned
                      banner; one mode at a time); slash commands and messages starting with

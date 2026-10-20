@@ -1,7 +1,6 @@
 """/agy_doctor, /cc_doctor: check every link of the chain without running a turn."""
 
 import asyncio
-import json
 from pathlib import Path
 
 from . import engine
@@ -48,7 +47,7 @@ async def _bridge(agent):
         from mcp.client.stdio import stdio_client
     except ImportError as e:
         return [f"✗ cannot test the MCP bridge: {e}"]
-    config = json.loads(agent.backend.workspace.mcp_config.read_text())["mcpServers"].get("hermes")
+    config = agent.backend.workspace.bridge_config()
     if config is None:
         return ["✓ hermes MCP bridge: off (bridge_tools is empty)"]
     params = StdioServerParameters(command=config["command"], args=config["args"],

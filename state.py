@@ -1,5 +1,5 @@
 """Persistent state and turn log of each agent (agy: state.json and turns.log, Claude Code:
-claude-state.json and claude-turns.log), plus what the agents share (the chat's mode)."""
+claude-state.json and claude-turns.log, opencode: opencode-…), plus what the agents share (the chat's mode)."""
 
 import json
 import logging

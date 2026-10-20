@@ -1,6 +1,6 @@
 """Plugin settings (plugins.entries.alternative-agents.settings in config.yaml), with their defaults."""
 
-BACKENDS = ("agy", "claude")
+BACKENDS = ("agy", "claude", "opencode")
 BRIDGE_TOOLS = ("memory", "session_search", "skill_manage", "cronjob_manage", "text_to_speech",
                 "telegram_send", "hermes_thread", "tasks")
 
@@ -22,6 +22,13 @@ DEFAULTS = {
     "claude_model": "",
     "claude_effort": "",
     "claude_mark": "✳️",
+    # opencode (DeepSeek)
+    "opencode_path": "",
+    "opencode_workspace": "~/opencode-chat",
+    "opencode_model": "",
+    "opencode_effort": "",
+    "opencode_mark": "🐋",
+    "opencode_env_file": "~/.hermes/alternative-agents/.env",
     # display
     "react_working": "👀",
     "react_queued": "✍",
@@ -64,6 +71,7 @@ def load(get):
         cfg["voice_input"] = "direct"
     if cfg["claude_effort"] not in EFFORTS:
         cfg["claude_effort"] = ""
+    cfg["opencode_effort"] = str(cfg["opencode_effort"] or "").strip().lower()
     backends = [cfg["backends"]] if isinstance(cfg["backends"], str) else cfg["backends"] or []
     cfg["backends"] = [b for b in BACKENDS if b in backends]
     # "agy_task" was the tasks tool's name before Claude Code joined.

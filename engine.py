@@ -1,6 +1,6 @@
 """Turns: the queue, the agent's process, its stream-json events and the Telegram output.
 
-One Agent per enabled backend (agy, Claude Code), each with its queue, its turn and its btw;
+One Agent per enabled backend (agy, Claude Code, opencode), each with its queue, its turn and its btw;
 backends.py knows how to run each CLI and read its events, this module does the rest the same
 way for both.
 
@@ -380,6 +380,10 @@ class Agent:
         if run.stopped:
             return
         backend = self.backend
+        reason = backend.unavailable()
+        if reason:
+            run.result = {"status": "ERROR", "response": "", "error": reason}
+            return
         cmd, stdin = backend.command(run, prompt, conv, fork)
         root = backend.workspace.root
         root.mkdir(parents=True, exist_ok=True)

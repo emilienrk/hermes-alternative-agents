@@ -1,20 +1,20 @@
 name: alternative-agents
 label: alternative agents
 kind: standalone
-version: 1.7.0
+version: 2.0.0
 manifest_version: 2
 author: Emilien Roukine
 license: MIT
 homepage: https://github.com/emilienrk/hermes-alternative-agents
-tags: [telegram, gateway, antigravity, agy, claude-code]
+tags: [telegram, gateway, antigravity, agy, claude-code, opencode, deepseek]
 description: >
-  Talk to Antigravity (agy) or Claude Code from Telegram as an alternative to
-  Hermes' LLM: the agent's mode (/agy_on, /cc_on), /agy <message>, /cc <message>
-  or a reply to the agent routes your messages to its CLI instead of Hermes.
-  Voice notes and files ride along (voice replies too), the agents get Hermes'
-  memory, skills, MCP servers and a few Hermes tools through a bundled MCP
-  bridge, run scheduled tasks free of Hermes' LLM, and conversations can be
-  handed over between Hermes and an agent.
+  Talk to Antigravity (agy), Claude Code or opencode (DeepSeek) from Telegram as
+  an alternative to Hermes' LLM: the agent's mode (/agy_on, /cc_on, /oc_on),
+  /agy <message>, /cc <message>, /oc <message> or a reply to the agent routes
+  your messages to its CLI instead of Hermes. Voice notes and files ride along
+  (voice replies too), the agents get Hermes' memory, skills, MCP servers and a
+  few Hermes tools through a bundled MCP bridge, run scheduled tasks free of
+  Hermes' LLM, and conversations can be handed over between Hermes and an agent.
 requires_hermes: ">=0.21.6"
 provides_tools: []
 provides_hooks:
@@ -35,7 +35,7 @@ config_schema:
   backends:
     type: list
     default: [agy]
-    description: "Agents reachable from Telegram: agy (/agy…), claude (Claude Code, /cc…)."
+    description: "Agents reachable from Telegram: agy (/agy…), claude (Claude Code, /cc…), opencode (/oc…)."
   agy_path:
     type: str
     default: ""
@@ -77,6 +77,35 @@ config_schema:
     default: "✳️"
     label: Claude Code's mark emoji
     description: Emoji in Claude Code's footer, status and banner ("" for none).
+  opencode_path:
+    type: str
+    default: ""
+    label: opencode binary
+    description: "Path to the opencode CLI (default: opencode on PATH, else ~/.local/bin/opencode)."
+  opencode_workspace:
+    type: str
+    default: "~/opencode-chat"
+    description: opencode's working directory (inbox, outbox, generated .hermes config).
+  opencode_model:
+    type: str
+    default: ""
+    description: "opencode model until /oc_model picks another (default: deepseek/deepseek-flash)."
+  opencode_effort:
+    type: str
+    default: ""
+    description: "opencode's model variant until /oc_effort picks another (low, high, max; \"\": the model's default)."
+  opencode_mark:
+    type: str
+    default: "🐋"
+    label: opencode's mark emoji
+    description: Emoji in opencode's footer, status and banner ("" for none).
+  opencode_env_file:
+    type: str
+    default: "~/.hermes/alternative-agents/.env"
+    label: DeepSeek key file
+    description: >
+      File holding DEEPSEEK_API_KEY=… (mode 600), a key of its own for opencode: it reaches
+      opencode through its environment, never its config. Without it, /oc runs nothing.
   machine_notes:
     type: str
     default: ""
@@ -109,7 +138,7 @@ config_schema:
     type: str
     choices: [direct, local]
     default: direct
-    description: "Voice notes: direct (audio to agy, Google) or local (Hermes' Whisper first). Claude Code always gets local."
+    description: "Voice notes: direct (audio to agy, Google) or local (Hermes' Whisper first). Claude Code and opencode always get local."
   voice_reply:
     type: str
     choices: ["off", mirror, always]
@@ -147,4 +176,4 @@ config_schema:
   bridge_tools:
     type: list
     default: [memory, session_search, skill_manage, cronjob_manage, text_to_speech, telegram_send, hermes_thread, tasks]
-    description: Hermes tools the agents get through the bundled MCP bridge (tasks is agy_task / cc_task; [] turns the bridge off).
+    description: Hermes tools the agents get through the bundled MCP bridge (tasks is agy_task / cc_task / oc_task; [] turns the bridge off).
