@@ -946,6 +946,40 @@ class CommandTests(Base):
         self.assertIn("premier sujet", await plugin._cmd_conv(self.agy, "2"))
         self.assertEqual(store.load()["conversation_id"], "c1")
 
+    async def test_resume_turns_the_mode_on_with_the_preset_banner(self):
+        config.cfg["presets"] = {"souris": {"backend": "oc", "banner": "🐀 Mode souris"}}
+        store = self.oc.store
+        store.log_turn({"conversation_id": "plain", "message": "un sujet"})
+        store.log_turn({"conversation_id": "rat", "message": "(prompt /souris)", "preset": "souris"})
+        store.log_turn({"conversation_id": "rat", "message": "et ensuite ?"})
+        self.agy.store.update(sticky=True)
+        await plugin._cmd_on(self.agy, "")
+        agy_pin = self.agy.store.load()["mode_pin"]
+
+        self.assertIsNone(await plugin._cmd_conv(self.oc, ""))
+        self.assertTrue(self.adapter.sent("picker")[-1][2][0]["label"].endswith("/souris · et ensuite ?"))
+        reply = await plugin._cmd_conv(self.oc, "1")
+        self.assertIn("/souris · et ensuite ?", reply)
+        state = store.load()
+        self.assertEqual((state["conversation_id"], state["sticky"], state["preset"]), ("rat", True, "souris"))
+        self.assertNotIn("sticky", self.agy.store.load())  # one mode at a time
+        self.assertIn(("unpin", agy_pin), self.adapter.calls)
+        self.assertEqual(self.adapter.sent("bot_send")[-1][1], "🐀 Mode souris")
+        rat_pin = state["mode_pin"]
+
+        await plugin._cmd_conv(self.oc, "1")  # the same again: the banner stays
+        self.assertEqual(store.load()["mode_pin"], rat_pin)
+
+        self.assertIn("un sujet", await plugin._cmd_conv(self.oc, "2"))
+        state = store.load()
+        self.assertEqual((state["conversation_id"], state["sticky"], state.get("preset")), ("plain", True, None))
+        self.assertIn(("unpin", rat_pin), self.adapter.calls)
+        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐋 opencode mode on"))
+
+        await self.dispatch(event("la suite", msg_id="20"))  # goes to opencode, in that conversation
+        await self.finish(agent=self.oc)
+        self.assertEqual(self.calls()[-1]["conversation"], "plain")
+
     def test_commands_registered_per_backend(self):
         names = []
         ctx = SimpleNamespace(get_config=lambda key, default=None: SETTINGS.get(key, default),

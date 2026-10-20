@@ -54,7 +54,7 @@ The `/cc_…` (Claude Code) and `/oc_…` (opencode) commands are the same.
 | `/agy_verbose [on\|off]` | Live status of agy's actions, or just its answer |
 | `/agy_voice [direct\|local]` | Voice notes as audio for agy, or transcribed locally |
 | `/agy_voice reply [off\|mirror\|always]` | agy's answer as a voice note too (mirror: when you sent one) |
-| `/agy_conv [n]` | Resume a past conversation |
+| `/agy_conv [n]` | Resume a past conversation, in the agent's mode (under its preset's banner when a preset opened it) |
 | `/agy_retry` | Send your last message again |
 | `/agy_btw <question>` | Side question, answered right away even while agy works, in a separate conversation that knows the main one's last exchanges (Claude Code: a copy of the main conversation, at low effort). Reply to its answer to continue it |
 | `/agy_handoff [message]` | Hand the Hermes conversation over to agy (agy mode on, seeded with the thread) |

@@ -122,13 +122,17 @@ class Store:
         return turns
 
     def conversations(self, limit=8):
-        """Recent conversations, newest first: id, first message, last activity, turn count."""
+        """Recent conversations, newest first: id, first message, last activity, turn count, the preset
+        that opened it ("" if none) and its topic (first message that isn't the preset's prompt)."""
         convs = {}
         for order, turn in enumerate(self.recent_turns()):
             cid = turn.get("conversation_id")
             if not cid or turn.get("btw"):
                 continue
-            conv = convs.setdefault(cid, {"id": cid, "first": turn.get("message") or "", "turns": 0})
+            conv = convs.setdefault(cid, {"id": cid, "first": turn.get("message") or "", "turns": 0,
+                                          "preset": turn.get("preset") or "", "topic": ""})
+            if not conv["topic"] and not turn.get("preset"):
+                conv["topic"] = turn.get("message") or ""
             conv.update(last=turn.get("at") or "", order=order)
             conv["turns"] += 1
         return sorted(convs.values(), key=lambda c: c["order"], reverse=True)[:limit]

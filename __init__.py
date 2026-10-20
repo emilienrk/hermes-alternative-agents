@@ -576,21 +576,35 @@ async def _cmd_conv(agent, raw_args: str):
         if not arg.isdigit() or not 1 <= int(arg) <= len(convs):
             return f"Invalid number: 1 to {len(convs)}."
         return await pick(None, convs[int(arg) - 1]["id"])
-    choices = [{"value": c["id"], "label": f"{c['last'][5:10]} · {_cut(c['first'], 28)}",
+    choices = [{"value": c["id"], "label": f"{c['last'][5:10]} · {_cut(_conv_title(c), 28)}",
                 "is_current": c["id"] == current} for c in convs]
     if await _picker(agent, f"Resume a {agent.label} conversation:", choices, pick):
         return None
     rows = [f"{'▶' if c['id'] == current else ' '} {i}. {c['last'][:16].replace('T', ' ')} · {c['turns']} turns · "
-            f"{_cut(c['first'], 60)}" for i, c in enumerate(convs, 1)]
+            f"{_cut(_conv_title(c), 60)}" for i, c in enumerate(convs, 1)]
     return f"{agent.label} conversations:\n" + "\n".join(rows) + f"\n\n{agent.cmd('conv')} <number> to resume."
 
 
+def _conv_title(conv):
+    """A conversation as listed: its first message, or the preset that opened it and what followed."""
+    if conv["preset"]:
+        return f"/{conv['preset']} · {conv['topic']}" if conv["topic"] else f"/{conv['preset']}"
+    return conv["first"]
+
+
 async def _pick_conv(agent, _chat_id, value):
+    """Resume a conversation in the agent's mode, under its preset's banner if a preset opened it."""
     conv = next((c for c in agent.store.conversations(50) if c["id"] == value), None)
-    agent.store.update(conversation_id=value)
-    await agent.end_preset()
-    first = f" (\"{_cut(conv['first'], 60)}\")" if conv else ""
-    return f"{agent.label} conversation resumed{first}."
+    preset = (conv or {}).get("preset") or None
+    before = agent.store.load()
+    await _modes_off(but=agent)
+    agent.store.update(conversation_id=value, sticky=True, preset=preset)
+    if before.get("sticky") and before.get("preset") != preset:
+        await agent.set_mode_banner(False)  # the banner changes with the preset
+    await agent.set_mode_banner(True)
+    title = f": {_cut(_conv_title(conv), 60)}" if conv else ""
+    return (f"{agent.mark} {agent.label} conversation resumed{title}\n".lstrip()
+            + f"Your messages go to {agent.label}, {agent.cmd('off')} to go back to Hermes.")
 
 
 async def _picker(agent, title, choices, on_selected):
