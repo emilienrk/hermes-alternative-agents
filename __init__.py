@@ -71,11 +71,11 @@ def register(ctx):
 
 
 def configure(get):
-    """Apply the plugin settings (plugins.entries.agy-chat.settings in config.yaml)."""
+    """Apply the plugin settings (plugins.entries.alternative-agents.settings in config.yaml)."""
     cfg = config.load(get)
     if not cfg["chat_id"]:
-        logger.warning("agy-chat: no chat_id setting, nothing will be routed "
-                       "(hermes config set plugins.entries.agy-chat.settings.chat_id <telegram chat id>)")
+        logger.warning("alternative-agents: no chat_id setting, nothing will be routed "
+                       "(hermes config set plugins.entries.alternative-agents.settings.chat_id <telegram chat id>)")
     workspace.configure()
     engine.configure(backends.make(cfg["backends"]))
 
@@ -103,9 +103,9 @@ async def _on_dispatch(event=None, gateway=None, **_kwargs):
         decision = route(event, {name: agent.store.load() for name, agent in engine.AGENTS.items()})
         if decision is None:
             return None
-        return await _act(decision, event) or {"action": "skip", "reason": "agy-chat"}
+        return await _act(decision, event) or {"action": "skip", "reason": "alternative-agents"}
     except Exception:
-        logger.exception("agy-chat: dispatch failed")
+        logger.exception("alternative-agents: dispatch failed")
         return None
 
 
@@ -468,7 +468,7 @@ async def _cmd_task(agent, raw_args: str):
             await asyncio.to_thread(tasks.run_now, task["job_id"])
             return f"▶ {label} task \"{task['name']}\" started: its answer will arrive here."
     except Exception as e:
-        logger.exception("agy-chat: %s failed", cmd)
+        logger.exception("alternative-agents: %s failed", cmd)
         return f"❌ {label} task: {e}"
     if not listed:
         return (f"No {label} task. A task runs a prompt on {label} on a schedule, free of Hermes' LLM:\n"
@@ -556,9 +556,9 @@ async def _picker(agent, title, choices, on_selected):
         return False
     try:
         result = await picker(engine.TARGET_CHAT, title, choices,
-                              f"agy-chat:{agent.backend.name}:{engine.TARGET_CHAT}", on_selected)
+                              f"alternative-agents:{agent.backend.name}:{engine.TARGET_CHAT}", on_selected)
     except Exception:
-        logger.exception("agy-chat: picker failed")
+        logger.exception("alternative-agents: picker failed")
         return False
     return bool(getattr(result, "success", False))
 

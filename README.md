@@ -1,4 +1,4 @@
-# hermes-agy-chat
+# hermes-alternative-agents
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin to talk to
 [Antigravity](https://antigravity.google/) (`agy`, Google's agent CLI) or
@@ -100,10 +100,10 @@ read in Hermes' timezone (`timezone` in `config.yaml`; empty means the machine's
 ## Install
 
 ```bash
-hermes plugins install emilienrk/hermes-agy-chat --enable
-hermes config set plugins.entries.agy-chat.settings.chat_id <your Telegram chat id>
-hermes config set plugins.entries.agy-chat.settings.user_name <your name>
-hermes config set plugins.entries.agy-chat.settings.backends '[agy, claude]'   # optional: Claude Code too
+hermes plugins install emilienrk/hermes-alternative-agents --enable
+hermes config set plugins.entries.alternative-agents.settings.chat_id <your Telegram chat id>
+hermes config set plugins.entries.alternative-agents.settings.user_name <your name>
+hermes config set plugins.entries.alternative-agents.settings.backends '[agy, claude]'   # optional: Claude Code too
 ```
 
 `chat_id` is your private chat with the bot, whose id is your Telegram user id: the one already in
@@ -126,11 +126,11 @@ Then:
    ```
 3. Restart the gateway, then send `/agy_doctor` (or `/cc_doctor`) in Telegram.
 
-Update with `hermes plugins update agy-chat`, then restart the gateway.
+Update with `hermes plugins update alternative-agents`, then restart the gateway.
 
 ## Settings
 
-Under `plugins.entries.agy-chat.settings` in `config.yaml` (also editable in the Desktop app):
+Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also editable in the Desktop app):
 
 | Key | Default | |
 |---|---|---|
@@ -181,8 +181,14 @@ Hermes' MCP servers (written with mode 600).
 ## Data
 
 Plugin state (mode, model, conversation, tasks) and the turn logs live in
-`<HERMES_HOME>/plugin-data/agy-chat/` (`state.json` and `turns.log` for agy, `claude-state.json` and
+`<HERMES_HOME>/plugin-data/alternative-agents/` (`state.json` and `turns.log` for agy, `claude-state.json` and
 `claude-turns.log` for Claude Code), outside the install directory, so updates keep them.
+
+The plugin was called `agy-chat`. Coming from it: stop the gateway, move
+`plugin-data/agy-chat/` to `plugin-data/alternative-agents/` and `plugins/agy-chat/` to
+`plugins/alternative-agents/`, rename `agy-chat` to `alternative-agents` in `plugins.enabled` and
+`plugins.entries` of `config.yaml`, and regenerate the tasks' scripts (`scripts/agy-tasks/*.py`),
+which ran `plugins/agy-chat/task_run.py`.
 
 ## Development
 

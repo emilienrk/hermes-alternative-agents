@@ -28,7 +28,7 @@ async def report(agent):
 
 def _chat(agent):
     if not engine.TARGET_CHAT:
-        return ["✗ no chat_id setting: hermes config set plugins.entries.agy-chat.settings.chat_id <id>, "
+        return ["✗ no chat_id setting: hermes config set plugins.entries.alternative-agents.settings.chat_id <id>, "
                 "then restart the gateway"]
     return [f"✓ routed chat: {engine.TARGET_CHAT}"]
 

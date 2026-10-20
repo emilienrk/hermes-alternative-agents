@@ -220,7 +220,7 @@ class Agent:
         """Queue a job and start the worker when idle; returns True when it waits behind a turn."""
         self.queue.append(job)
         if self.worker is None or self.worker.done():
-            self.worker = asyncio.get_running_loop().create_task(self._drain(), name=f"agy-chat-{self.backend.name}")
+            self.worker = asyncio.get_running_loop().create_task(self._drain(), name=f"alternative-agents-{self.backend.name}")
             return False
         if job.message_id and REACT_QUEUED:
             await react(job.message_id, REACT_QUEUED)
@@ -250,8 +250,8 @@ class Agent:
             try:
                 await self._turn(jobs)
             except Exception as e:  # the worker must survive and always answer
-                logger.exception("agy-chat: %s turn failed", self.backend.name)
-                await self.send(f"❌ agy-chat: {e}\n{self.cmd('retry')} to run it again.")
+                logger.exception("alternative-agents: %s turn failed", self.backend.name)
+                await self.send(f"❌ alternative-agents: {e}\n{self.cmd('retry')} to run it again.")
             finally:
                 self.run = None
                 for job in jobs:
@@ -371,7 +371,7 @@ class Agent:
             try:
                 shutil.copy2(src, dest)
             except OSError:
-                logger.warning("agy-chat: cannot copy attachment %s", src)
+                logger.warning("alternative-agents: cannot copy attachment %s", src)
                 continue
             out.append((str(dest), kind or ""))
         return out
@@ -528,7 +528,7 @@ class Agent:
                 else:
                     res = await ad.send_document(TARGET_CHAT, str(p), reply_to=reply_to)
             except Exception as e:
-                logger.exception("agy-chat: cannot send %s", p)
+                logger.exception("alternative-agents: cannot send %s", p)
                 res = None
                 error = str(e)
             else:
@@ -553,9 +553,9 @@ class Agent:
                     ids = [*getattr(res, "continuation_message_ids", ()), res.message_id]
                     self._remember(ids, side)
                     return [i for i in ids if i]
-                logger.warning("agy-chat: adapter send failed: %s", res.error)
+                logger.warning("alternative-agents: adapter send failed: %s", res.error)
             except Exception:
-                logger.exception("agy-chat: adapter send raised")
+                logger.exception("alternative-agents: adapter send raised")
         # No live adapter (or it failed): Hermes' standalone sender. It also mirrors the text into
         # Hermes' session, which the adapter path avoids.
         out = await asyncio.to_thread(_send_standalone, text)
@@ -581,9 +581,9 @@ class Agent:
                     try:  # the user may have unpinned or deleted it already
                         await call(chat_id=chat, message_id=pinned)
                     except Exception:
-                        logger.debug("agy-chat: %s failed", call.__name__, exc_info=True)
+                        logger.debug("alternative-agents: %s failed", call.__name__, exc_info=True)
         except Exception:
-            logger.exception("agy-chat: mode banner failed")
+            logger.exception("alternative-agents: mode banner failed")
             return False
         return True
 
@@ -591,7 +591,7 @@ class Agent:
 
     def side(self, job):
         """Run a btw message now, next to the main turn and outside its queue (one btw at a time)."""
-        asyncio.get_running_loop().create_task(self._side_turn(job), name="agy-chat-btw")
+        asyncio.get_running_loop().create_task(self._side_turn(job), name="alternative-agents-btw")
 
     async def _side_turn(self, job):
         self.side_lock = self.side_lock or asyncio.Lock()
@@ -599,8 +599,8 @@ class Agent:
             try:
                 await self._btw(job)
             except Exception as e:
-                logger.exception("agy-chat: btw failed")
-                await self.send(f"❌ agy-chat btw: {e}", reply_to=job.message_id, side=True)
+                logger.exception("alternative-agents: btw failed")
+                await self.send(f"❌ alternative-agents btw: {e}", reply_to=job.message_id, side=True)
             finally:
                 self.side_run = None
                 if job.message_id:
@@ -655,7 +655,7 @@ class Agent:
             path = await (_edge_voice(text, self.backend.workspace.outbox) if cfg["tts_provider"] == "edge"
                           else asyncio.to_thread(_hermes_voice, text))
         except Exception:
-            logger.exception("agy-chat: TTS failed")
+            logger.exception("alternative-agents: TTS failed")
             return
         ad = adapter()
         if not path or ad is None:
@@ -663,7 +663,7 @@ class Agent:
         try:
             res = await ad.send_voice(TARGET_CHAT, path, reply_to=reply_to)
         except Exception:
-            logger.exception("agy-chat: cannot send the voice reply")
+            logger.exception("alternative-agents: cannot send the voice reply")
             return
         if res is not None and res.success:
             self._remember([res.message_id])
@@ -685,7 +685,7 @@ def _transcribe(path):
         from tools.transcription_tools import transcribe_audio
         result = transcribe_audio(path, None, "gateway")
     except Exception:
-        logger.exception("agy-chat: transcription failed")
+        logger.exception("alternative-agents: transcription failed")
         return ""
     return (result.get("transcript") or "").strip() if result.get("success") else ""
 
@@ -704,7 +704,7 @@ async def _typing_loop():
             try:
                 await ad.send_typing(TARGET_CHAT)
             except Exception:
-                logger.debug("agy-chat: typing failed", exc_info=True)
+                logger.debug("alternative-agents: typing failed", exc_info=True)
         await asyncio.sleep(TYPING_EVERY_S)
 
 
@@ -721,9 +721,9 @@ def _send_standalone(text):
         out = json.loads(send_message_tool({"action": "send", "target": TARGET, "message": text}))
         if out.get("success"):
             return out.get("message_id")
-        logger.warning("agy-chat: send_message failed: %s", str(out)[:500])
+        logger.warning("alternative-agents: send_message failed: %s", str(out)[:500])
     except Exception:
-        logger.exception("agy-chat: send_message raised")
+        logger.exception("alternative-agents: send_message raised")
     return None
 
 
@@ -734,7 +734,7 @@ async def _edit(message_id, text, final=True):
     try:
         await ad.edit_message(TARGET_CHAT, message_id, text, finalize=final)
     except Exception:
-        logger.debug("agy-chat: edit failed", exc_info=True)
+        logger.debug("alternative-agents: edit failed", exc_info=True)
 
 
 async def react(message_id, emoji):
@@ -748,7 +748,7 @@ async def react(message_id, emoji):
     try:
         await setter(TARGET_CHAT, message_id, emoji)
     except Exception:
-        logger.debug("agy-chat: reaction failed", exc_info=True)
+        logger.debug("alternative-agents: reaction failed", exc_info=True)
 
 
 def _spoken_text(response):
@@ -763,7 +763,7 @@ def _hermes_voice(text):
     from tools.tts_tool import text_to_speech_tool
     out = json.loads(text_to_speech_tool(text=text))
     if not out.get("success"):
-        logger.warning("agy-chat: Hermes TTS failed: %s", str(out.get("error") or out)[:300])
+        logger.warning("alternative-agents: Hermes TTS failed: %s", str(out.get("error") or out)[:300])
     return out.get("file_path") if out.get("success") else None
 
 
@@ -784,7 +784,7 @@ async def _edge_voice(text, outbox):
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
     _out, err = await proc.communicate()
     if proc.returncode != 0:  # no ffmpeg/opus: Telegram still plays the MP3, as an audio file
-        logger.warning("agy-chat: ffmpeg failed: %s", err.decode(errors="replace")[:300])
+        logger.warning("alternative-agents: ffmpeg failed: %s", err.decode(errors="replace")[:300])
         return str(mp3)
     mp3.unlink(missing_ok=True)
     return str(ogg)

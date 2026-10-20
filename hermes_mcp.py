@@ -6,7 +6,7 @@ lack is what makes Hermes Hermes: the shared memory, past conversations, skills 
 write, the scheduler, voice notes and a way to message the user mid-task. The registry
 tools keep Hermes' own schema and handler, so Hermes and the agent read and write the same state.
 
-Run with Hermes' venv python: agy-chat's workspace.py writes the launch line into the agent's
+Run with Hermes' venv python: alternative-agents' workspace.py writes the launch line into the agent's
 MCP config.
 """
 
@@ -29,12 +29,12 @@ if str(HERMES_SRC) not in sys.path:
     sys.path.insert(0, str(HERMES_SRC))
 
 # Written into the agent's MCP config by workspace.py, from the plugin settings.
-TARGET_CHAT = os.environ.get("AGY_CHAT_CHAT_ID", "")
-USER = os.environ.get("AGY_CHAT_USER") or "the user"
+TARGET_CHAT = os.environ.get("ALT_AGENTS_CHAT_ID", "")
+USER = os.environ.get("ALT_AGENTS_USER") or "the user"
 TARGET = f"telegram:{TARGET_CHAT}"
 SESSION_KEY = f"agent:main:telegram:dm:{TARGET_CHAT}"
-ENABLED = set(filter(None, os.environ.get("AGY_CHAT_TOOLS", "").split(","))) or None  # None: all
-TASK_SETTINGS = json.loads(os.environ.get("AGY_CHAT_TASK") or "{}")
+ENABLED = set(filter(None, os.environ.get("ALT_AGENTS_TOOLS", "").split(","))) or None  # None: all
+TASK_SETTINGS = json.loads(os.environ.get("ALT_AGENTS_TASK") or "{}")
 AGENT = TASK_SETTINGS.get("label") or "agy"
 TASK_TOOL = f"{TASK_SETTINGS.get('prefix') or 'agy'}_task"
 
@@ -169,7 +169,7 @@ def _load_by_path(module_name, filename):
 
 
 def task(args):
-    tasks = _load_by_path("agy_chat_tasks", "tasks.py")
+    tasks = _load_by_path("alternative_agents_tasks", "tasks.py")
     action = args.get("action")
     if action == "list":
         return {"success": True, "tasks": tasks.list_tasks()}

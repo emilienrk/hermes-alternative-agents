@@ -1,4 +1,4 @@
-"""agy-chat tests: routing, and whole turns against fake_agy.py, fake_claude.py and a fake Telegram adapter.
+"""alternative-agents tests: routing, and whole turns against fake_agy.py, fake_claude.py and a fake Telegram adapter.
 
 Run with the gateway's interpreter (it imports Hermes' gateway modules):
   <hermes venv python> tests/test_chat.py
@@ -22,19 +22,19 @@ sys.path.insert(0, str(Path(os.environ.get("HERMES_HOME") or Path.home() / ".her
 
 
 def _load_plugin():
-    spec = importlib.util.spec_from_file_location("agy_chat_under_test", PLUGIN_DIR / "__init__.py",
+    spec = importlib.util.spec_from_file_location("alt_agents_under_test", PLUGIN_DIR / "__init__.py",
                                                   submodule_search_locations=[str(PLUGIN_DIR)])
     module = importlib.util.module_from_spec(spec)
-    sys.modules["agy_chat_under_test"] = module
+    sys.modules["alt_agents_under_test"] = module
     spec.loader.exec_module(module)
     return module
 
 
 plugin = _load_plugin()
-engine = sys.modules["agy_chat_under_test.engine"]
-workspace = sys.modules["agy_chat_under_test.workspace"]
-config = sys.modules["agy_chat_under_test.config"]
-backends = sys.modules["agy_chat_under_test.backends"]
+engine = sys.modules["alt_agents_under_test.engine"]
+workspace = sys.modules["alt_agents_under_test.workspace"]
+config = sys.modules["alt_agents_under_test.config"]
+backends = sys.modules["alt_agents_under_test.backends"]
 CHAT = "424242"
 SETTINGS = {"chat_id": CHAT, "user_name": "Alex", "backends": ["agy", "claude"]}
 FAKES = {"agy": str(TESTS_DIR / "fake_agy.py"), "claude": str(TESTS_DIR / "fake_claude.py")}
@@ -120,7 +120,7 @@ def event(text="", media=(), types=(), mtype="text", msg_id="1", reply_to=None, 
 
 class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="agy-chat-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="alternative-agents-test-"))
         self.cfg_saved = dict(config.cfg)
         self.saved = {(module, name): getattr(module, name) for module, name in (
             (engine, "TYPING_EVERY_S"), (engine, "STATUS_EVERY_S"), (engine, "_transcribe"),
@@ -252,7 +252,7 @@ class TurnTests(Base):
     async def test_basic_turn(self):
         store = self.agy.store
         result = await self.dispatch(event("/agy liste mes projets", msg_id="7"))
-        self.assertEqual(result, {"action": "skip", "reason": "agy-chat"})
+        self.assertEqual(result, {"action": "skip", "reason": "alternative-agents"})
         await self.finish()
         reply = self.adapter.sent()[-1]
         self.assertIn("ECHO:", reply[1])
@@ -330,7 +330,7 @@ class TurnTests(Base):
         self.agy.backend.bin = str(self.tmp / "missing-agy")
         await self.dispatch(event("/agy salut", msg_id="7"))
         await self.finish()
-        self.assertIn("❌ agy-chat", self.adapter.sent()[-1][1])
+        self.assertIn("❌ alternative-agents", self.adapter.sent()[-1][1])
         self.assertNotIn("inflight", self.agy.store.load())
         self.assertEqual(self.adapter.calls[-1], ("react", "7", None))
         self.assertIsNone(self.agy.run)
@@ -757,7 +757,7 @@ class BtwTests(Base):
     async def finish_btw(self, timeout=20):
         for _ in range(int(timeout / 0.1)):
             await asyncio.sleep(0.1)
-            tasks = [t for t in asyncio.all_tasks() if t.get_name() == "agy-chat-btw"]
+            tasks = [t for t in asyncio.all_tasks() if t.get_name() == "alternative-agents-btw"]
             if not tasks:
                 return
         raise AssertionError("btw still running")
@@ -841,7 +841,7 @@ class AgentTests(Base):
 
     async def test_tasks(self):
         import importlib
-        tasks = importlib.import_module("agy_chat_under_test.tasks")
+        tasks = importlib.import_module("alt_agents_under_test.tasks")
         jobs, calls = {}, []
 
         def cron(args):
@@ -883,7 +883,7 @@ class AgentTests(Base):
     def run_task(self, task, runner="task_run.py"):
         import subprocess
         hermes = self.tmp / "hermes"
-        (hermes / "config.yaml").write_text(json.dumps({"plugins": {"entries": {"agy-chat": {"settings": {
+        (hermes / "config.yaml").write_text(json.dumps({"plugins": {"entries": {"alternative-agents": {"settings": {
             "user_name": "Alex", "claude_path": FAKES["claude"], "claude_workspace": str(self.tmp / "cw")}}}}}))
         env = {**os.environ, "HERMES_HOME": str(hermes)}
         return subprocess.run([sys.executable, str(PLUGIN_DIR / runner), json.dumps(task)],
@@ -979,7 +979,7 @@ class WorkspaceTests(Base):
         servers = json.loads(ws.mcp_config.read_text())["mcpServers"]
         self.assertEqual(sorted(servers), ["hermes", "stats"])
         self.assertEqual(servers["stats"]["type"], "http")
-        self.assertEqual(json.loads(servers["hermes"]["env"]["AGY_CHAT_TASK"])["prefix"], "cc")
+        self.assertEqual(json.loads(servers["hermes"]["env"]["ALT_AGENTS_TASK"])["prefix"], "cc")
         self.assertEqual(oct(ws.mcp_config.stat().st_mode & 0o777), "0o600")
         self.assertTrue((ws.plugin / ".claude-plugin" / "plugin.json").exists())
 

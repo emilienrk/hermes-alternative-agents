@@ -198,7 +198,7 @@ class Agy(Backend):
                                  text=True, timeout=30, cwd=str(self.workspace.root), stdin=subprocess.DEVNULL)
             groups = json.loads(out.stdout)["command"]["data"]["groups"]
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
-            logger.warning("agy-chat: agy /usage failed", exc_info=True)
+            logger.warning("alternative-agents: agy /usage failed", exc_info=True)
             return "Antigravity quota: unavailable (`agy -p /usage` failed)"
         lines = []
         for group in groups:

@@ -1,4 +1,4 @@
-"""Plugin settings (plugins.entries.agy-chat.settings in config.yaml), with their defaults."""
+"""Plugin settings (plugins.entries.alternative-agents.settings in config.yaml), with their defaults."""
 
 BACKENDS = ("agy", "claude")
 BRIDGE_TOOLS = ("memory", "session_search", "skill_manage", "cronjob_manage", "text_to_speech",

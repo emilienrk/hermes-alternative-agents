@@ -15,9 +15,9 @@ def _data_dir():
     # Outside the install tree, which `hermes plugins update` replaces.
     try:
         from plugins.plugin_storage import plugin_data_dir
-        return plugin_data_dir("agy-chat")
+        return plugin_data_dir("alternative-agents")
     except Exception:
-        path = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / "agy-chat"
+        path = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / "alternative-agents"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -98,7 +98,7 @@ class Store:
             with self.turns_log.open("a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except OSError:
-            logger.warning("agy-chat: cannot write %s", self.turns_log)
+            logger.warning("alternative-agents: cannot write %s", self.turns_log)
 
     def recent_turns(self):
         """Logged turns, oldest first (only the log's tail is read)."""

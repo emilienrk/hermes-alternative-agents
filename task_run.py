@@ -30,7 +30,7 @@ def _load_plugin():
     src = HERMES_HOME / "hermes-agent"
     if src.is_dir() and str(src) not in sys.path:
         sys.path.insert(0, str(src))
-    spec = importlib.util.spec_from_file_location("agy_chat_task", PLUGIN_DIR / "__init__.py",
+    spec = importlib.util.spec_from_file_location("alternative_agents_task", PLUGIN_DIR / "__init__.py",
                                                   submodule_search_locations=[str(PLUGIN_DIR)])
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -44,7 +44,7 @@ def _settings(task):
         config = yaml.safe_load((HERMES_HOME / "config.yaml").read_text()) or {}
     except (OSError, yaml.YAMLError):
         config = {}
-    settings = dict((((config.get("plugins") or {}).get("entries") or {}).get("agy-chat") or {}).get("settings") or {})
+    settings = dict((((config.get("plugins") or {}).get("entries") or {}).get("alternative-agents") or {}).get("settings") or {})
     settings.update({new: task[old] for old, new in _LEGACY_KEYS.items() if task.get(old)})
     settings.update(task.get("settings") or {})
     settings["backends"] = [task.get("backend") or "agy"]  # this task's agent, whatever the chat enables

@@ -1,11 +1,11 @@
-name: agy-chat
-label: agy chat
+name: alternative-agents
+label: alternative agents
 kind: standalone
 version: 1.7.0
 manifest_version: 2
 author: Emilien Roukine
 license: MIT
-homepage: https://github.com/emilienrk/hermes-agy-chat
+homepage: https://github.com/emilienrk/hermes-alternative-agents
 tags: [telegram, gateway, antigravity, agy, claude-code]
 description: >
   Talk to Antigravity (agy) or Claude Code from Telegram as an alternative to
