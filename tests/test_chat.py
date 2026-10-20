@@ -904,6 +904,19 @@ class AgentTests(Base):
         self.assertEqual(out.returncode, 1)
         self.assertIn("❌", out.stdout)
 
+    async def test_task_context_and_silence(self):
+        task = {"name": "health", "prompt": "check it", "agy_bin": FAKES["agy"], "workspace": str(self.tmp),
+                "context_command": ["echo", "container Up"]}
+        out = self.run_task(task)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        prompt = self.calls()[0]["prompt"]
+        self.assertIn("Output of `echo container Up` (exit 0)", prompt)
+        self.assertIn("container Up", prompt)
+        self.assertLess(prompt.index("container Up"), prompt.index("check it"))
+        self.mode("silent")
+        out = self.run_task(task)
+        self.assertEqual((out.returncode, out.stdout), (0, ""))  # Hermes' cron delivers nothing
+
     async def test_claude_task_run(self):
         out = self.run_task({"backend": "claude", "name": "point", "prompt": "fais le point", "model": ""})
         self.assertEqual(out.returncode, 0, out.stderr)

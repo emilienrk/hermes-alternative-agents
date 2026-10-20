@@ -73,7 +73,7 @@ def _slug(text):
     return f"{words}-{secrets.token_hex(2)}"
 
 
-def create(schedule, prompt, settings, name=""):
+def create(schedule, prompt, settings, name="", context_command=None):
     """Schedule ``prompt`` for the agent ``settings`` names (Backend.task_settings()); returns the task
     (job_id, name, schedule, next_run_at)."""
     prompt, schedule = prompt.strip(), schedule.strip()
@@ -83,6 +83,8 @@ def create(schedule, prompt, settings, name=""):
     slug = _slug(name)
     backend = settings.get("backend") or "agy"
     task = {"backend": backend, "name": name, "prompt": prompt, "model": settings.get("model") or ""}
+    if context_command:  # argv run before the agent; its output opens the prompt (task_run.py)
+        task["context_command"] = [str(arg) for arg in context_command]
     script = HERMES_HOME / "scripts" / SCRIPTS_SUBDIR / f"{slug}.py"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(SCRIPT_TEMPLATE.format(task=json.dumps(task, ensure_ascii=False), runner=str(RUNNER),

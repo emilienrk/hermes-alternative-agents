@@ -3,13 +3,16 @@
 Usage: python task_run.py '<task json>'  (written by tasks.py into the task's cron script)
 
 The plugin is loaded by path and configured from the settings Hermes keeps in config.yaml, so a
-task runs its agent exactly as a Telegram turn would, minus the chat.
+task runs its agent exactly as a Telegram turn would, minus the chat. A task's context_command runs
+first and its output opens the prompt, like a Hermes cron job's script. An answer that is a silence
+marker ([SILENT]) prints nothing: Hermes' cron delivers no empty output.
 """
 
 import asyncio
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,6 +22,8 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 # Tasks created before Claude Code joined carried these settings themselves.
 _LEGACY_KEYS = {"agy_bin": "agy_path", "workspace": "workspace", "timeout_minutes": "timeout_minutes",
                 "user": "user_name", "mark": "mark"}
+CONTEXT_TIMEOUT_S = 30 * 60
+CONTEXT_MAX_CHARS = 40_000
 
 
 def _load_plugin():
@@ -46,6 +51,26 @@ def _settings(task):
     return settings
 
 
+def _context(command):
+    """The context command's output, for the prompt (its failure is context too)."""
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, errors="replace", stdin=subprocess.DEVNULL,
+                              timeout=CONTEXT_TIMEOUT_S, cwd=str(Path.home()))
+        output, code = (proc.stdout + proc.stderr).strip(), proc.returncode
+    except (OSError, subprocess.TimeoutExpired) as e:
+        output, code = str(e), "?"
+    return (f"Output of `{' '.join(command)}` (exit {code}), gathered just before this task:\n"
+            f"{output[-CONTEXT_MAX_CHARS:] or '(none)'}")
+
+
+def _silent(response):
+    try:
+        from gateway.response_filters import is_autonomous_silence_response
+        return is_autonomous_silence_response(response)
+    except Exception:
+        return response.strip() == "[SILENT]"
+
+
 def main():
     task = json.loads(sys.argv[1])
     plugin = _load_plugin()
@@ -58,9 +83,10 @@ def main():
     # side: the task's conversation must not become the chat's current one.
     run = engine.Run([], task.get("model") or store.model(state), store.effort(state), side=True)
     backend.workspace.prepare()
+    context = f"{_context(task['context_command'])}\n\n" if task.get("context_command") else ""
     message = (f"(Scheduled task \"{task['name']}\": you run unattended, nobody can answer a question. "
                f"Your final answer is sent to {plugin.workspace.USER} on Telegram as is: make it the deliverable, "
-               f"not an account of your work.)\n\n{task['prompt']}")
+               f"not an account of your work.)\n\n{context}{task['prompt']}")
     prompt = backend.prompt(run, message, None)
     error = ""
     try:
@@ -78,7 +104,8 @@ def main():
     if run.failed():
         print(f"{head}\n\n❌ {error or run.error_text() or 'no output'}"[:3500])
         return 1
-    print(f"{head}\n\n{engine.clean(response)}")
+    if not _silent(response):
+        print(f"{head}\n\n{engine.clean(response)}")
     return 0
 
 

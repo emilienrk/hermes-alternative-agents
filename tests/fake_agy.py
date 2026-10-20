@@ -59,6 +59,9 @@ def main():
         response += "\n" + (HERE / "media.txt").read_text()
     if mode == "long":
         response = "x" * 15000
+    if mode == "silent":
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS", "response": "[SILENT]"}})
+        return
     emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
                                         "response": f"Voir [main.py](file://{Path.home()}/main.py).\n{response}",
                                         "usage": {"total_tokens": 54321}}})
