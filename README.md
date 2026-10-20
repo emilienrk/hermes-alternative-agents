@@ -103,8 +103,10 @@ Code, the time, Hermes' memory and new messages of your thread with Hermes open 
 changed. Messages go through stdin (no size limit, nothing in `ps`), and it runs with `--auto`: no
 permission prompts.
 
-Measured with opencode 1.18.35: a turn costs a fixed ~30 KB of context (opencode's system prompt
-~9 KB, its tool descriptions ~21 KB) on top of this plugin's context and the conversation.
+Measured with opencode 1.18.35: every request carries a fixed ~30 KB (opencode's system prompt ~9 KB,
+its tool descriptions ~21 KB), plus the list of skills (`share_skills`) and the MCP tools' descriptions
+(the bridge and Hermes' MCP servers, `share_mcp_servers`): with 88 skills and two MCP servers, ~165 KB
+in all, mostly served from DeepSeek's cache after the first request.
 
 ## Presets
 
