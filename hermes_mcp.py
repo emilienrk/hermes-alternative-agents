@@ -1,12 +1,13 @@
-"""MCP server giving agy the Hermes tools it lacks (stdio, launched by agy itself).
+"""MCP server giving the agents (agy, Claude Code) the Hermes tools they lack (stdio, launched by
+the agent itself).
 
-agy already has a terminal, files, a browser, web search and image generation. What it
-lacks is what makes Hermes Hermes: the shared memory, past conversations, skills it can
+They already have a terminal, files, a browser and web search. What they
+lack is what makes Hermes Hermes: the shared memory, past conversations, skills it can
 write, the scheduler, voice notes and a way to message the user mid-task. The registry
-tools keep Hermes' own schema and handler, so both agents read and write the same state.
+tools keep Hermes' own schema and handler, so Hermes and the agent read and write the same state.
 
-Run with Hermes' venv python: agy-chat's workspace.py writes the launch line into agy's
-mcp_config.json.
+Run with Hermes' venv python: agy-chat's workspace.py writes the launch line into the agent's
+MCP config.
 """
 
 import asyncio
@@ -27,16 +28,18 @@ HERMES_SRC = HERMES_HOME / "hermes-agent"
 if str(HERMES_SRC) not in sys.path:
     sys.path.insert(0, str(HERMES_SRC))
 
-# Written into agy's mcp_config.json by workspace.py, from the plugin settings.
+# Written into the agent's MCP config by workspace.py, from the plugin settings.
 TARGET_CHAT = os.environ.get("AGY_CHAT_CHAT_ID", "")
 USER = os.environ.get("AGY_CHAT_USER") or "the user"
 TARGET = f"telegram:{TARGET_CHAT}"
 SESSION_KEY = f"agent:main:telegram:dm:{TARGET_CHAT}"
 ENABLED = set(filter(None, os.environ.get("AGY_CHAT_TOOLS", "").split(","))) or None  # None: all
 TASK_SETTINGS = json.loads(os.environ.get("AGY_CHAT_TASK") or "{}")
+AGENT = TASK_SETTINGS.get("label") or "agy"
+TASK_TOOL = f"{TASK_SETTINGS.get('prefix') or 'agy'}_task"
 
 
-# tool -> (module registering it, note appended to Hermes' description for agy)
+# tool -> (module registering it, note appended to Hermes' description for the agent)
 REGISTRY_TOOLS = {
     "memory": ("tools.memory_tool", (
         "Memory shared with Hermes: what you write here, Hermes reads on every turn, and vice versa. "
@@ -67,9 +70,9 @@ CUSTOM_TOOLS = {
             "required": ["message"],
         },
     },
-    "agy_task": {
+    TASK_TOOL: {
         "description": (
-            f"Schedules a prompt that YOU (agy) will run unattended, free (no Hermes LLM): your answer is "
+            f"Schedules a prompt that YOU ({AGENT}) will run unattended, free (no Hermes LLM): your answer is "
             f"sent to {USER} on Telegram. For recurring or later work: daily digest, weekly check, \"in 2h, "
             "remind me…\". The prompt must be self-contained (no access to this conversation). Actions: "
             "list, create (schedule + prompt [+ name]), remove (job_id), run (job_id, now)."),
@@ -115,7 +118,7 @@ def _registry_entry(name):
 
 
 def _enabled(name):
-    return ENABLED is None or name in ENABLED
+    return ENABLED is None or ("tasks" if name == TASK_TOOL else name) in ENABLED
 
 
 def list_tools():
@@ -141,8 +144,8 @@ def call_tool(name, args):
     args = dict(args or {})
     if not _enabled(name):
         return json.dumps({"error": f"Tool disabled: {name}"})
-    if name == "agy_task":
-        return json.dumps(agy_task(args), ensure_ascii=False)
+    if name == TASK_TOOL:
+        return json.dumps(task(args), ensure_ascii=False)
     if name == "telegram_send":
         from tools.send_message_tool import send_message_tool
         return send_message_tool({"action": "send", "target": TARGET, "message": str(args.get("message") or "")})
@@ -165,7 +168,7 @@ def _load_by_path(module_name, filename):
     return module
 
 
-def agy_task(args):
+def task(args):
     tasks = _load_by_path("agy_chat_tasks", "tasks.py")
     action = args.get("action")
     if action == "list":

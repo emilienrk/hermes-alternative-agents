@@ -1,19 +1,20 @@
 name: agy-chat
 label: agy chat
 kind: standalone
-version: 1.6.0
+version: 1.7.0
 manifest_version: 2
 author: Emilien Roukine
 license: MIT
 homepage: https://github.com/emilienrk/hermes-agy-chat
-tags: [telegram, gateway, antigravity, agy]
+tags: [telegram, gateway, antigravity, agy, claude-code]
 description: >
-  Talk to Antigravity (agy) from Telegram as an alternative to Hermes' LLM: the
-  agy mode (/agy_on), /agy <message> or a reply to agy routes your messages to
-  the agy CLI instead of Hermes. Voice notes and files ride along (voice replies
-  too), agy gets Hermes' memory, skills, MCP servers and a few Hermes tools
-  through a bundled MCP bridge, runs scheduled tasks free of Hermes' LLM, and
-  conversations can be handed over between Hermes and agy.
+  Talk to Antigravity (agy) or Claude Code from Telegram as an alternative to
+  Hermes' LLM: the agent's mode (/agy_on, /cc_on), /agy <message>, /cc <message>
+  or a reply to the agent routes your messages to its CLI instead of Hermes.
+  Voice notes and files ride along (voice replies too), the agents get Hermes'
+  memory, skills, MCP servers and a few Hermes tools through a bundled MCP
+  bridge, run scheduled tasks free of Hermes' LLM, and conversations can be
+  handed over between Hermes and an agent.
 requires_hermes: ">=0.21.6"
 provides_tools: []
 provides_hooks:
@@ -24,13 +25,17 @@ config_schema:
     required: true
     label: Telegram chat ID
     description: >
-      The only Telegram chat routed to agy (your DM with the bot). agy runs
+      The only Telegram chat routed to the agents (your DM with the bot). They run
       unsandboxed as the gateway's user: nothing is routed while this is empty.
   user_name:
     type: str
     default: ""
     label: Your name
-    description: How agy's context refers to you (default "the user").
+    description: How the agents' context refers to you (default "the user").
+  backends:
+    type: list
+    default: [agy]
+    description: "Agents reachable from Telegram: agy (/agy…), claude (Claude Code, /cc…)."
   agy_path:
     type: str
     default: ""
@@ -44,27 +49,50 @@ config_schema:
     type: str
     default: ""
     description: "agy model used until /agy_model picks another (default: gemini-3.8-flash-high)."
-  machine_notes:
-    type: str
-    default: ""
-    description: Free text about the machine added to agy's context (services, caveats…).
-  skip_skills:
-    type: list
-    default: []
-    description: Hermes skill names hidden from agy.
-  timeout_minutes:
-    type: int
-    default: 30
-    description: Longest agy turn before it is stopped.
   mark:
     type: str
     default: "🛸"
-    label: Mark emoji
-    description: Emoji in the footer, status and banner ("" for none).
+    label: agy's mark emoji
+    description: Emoji in agy's footer, status and banner ("" for none).
+  claude_path:
+    type: str
+    default: ""
+    label: claude binary
+    description: "Path to the Claude Code CLI (default: claude on PATH, else ~/.local/bin/claude)."
+  claude_workspace:
+    type: str
+    default: "~/claude-chat"
+    description: Claude Code's working directory (inbox, outbox, generated .hermes context).
+  claude_model:
+    type: str
+    default: ""
+    description: "Claude Code model until /cc_model picks another: an alias (opus, sonnet, haiku, fable) or a full id (default: opus)."
+  claude_effort:
+    type: str
+    choices: ["", low, medium, high, xhigh, max]
+    default: ""
+    description: "Claude Code's reasoning effort until /cc_effort picks another (\"\": Claude Code's default)."
+  claude_mark:
+    type: str
+    default: "✳️"
+    label: Claude Code's mark emoji
+    description: Emoji in Claude Code's footer, status and banner ("" for none).
+  machine_notes:
+    type: str
+    default: ""
+    description: Free text about the machine added to the agents' context (services, caveats…).
+  skip_skills:
+    type: list
+    default: []
+    description: Hermes skill names hidden from the agents.
+  timeout_minutes:
+    type: int
+    default: 30
+    description: Longest turn before it is stopped.
   react_working:
     type: str
     default: "👀"
-    description: Reaction on your message while agy works ("" for none).
+    description: Reaction on your message while an agent works ("" for none).
   react_queued:
     type: str
     default: "✍"
@@ -72,21 +100,21 @@ config_schema:
   footer:
     type: bool
     default: true
-    description: "Footer under agy's answers (— 🛸 agy · 2 min)."
+    description: "Footer under the agents' answers (— 🛸 agy · 2 min)."
   verbose:
     type: bool
     default: false
-    description: Live status of agy's actions by default (/agy_verbose toggles it).
+    description: Live status of the agent's actions by default (/agy_verbose, /cc_verbose toggle it).
   voice_input:
     type: str
     choices: [direct, local]
     default: direct
-    description: "Voice notes: direct (audio to agy, Google) or local (Hermes' Whisper first)."
+    description: "Voice notes: direct (audio to agy, Google) or local (Hermes' Whisper first). Claude Code always gets local."
   voice_reply:
     type: str
     choices: ["off", mirror, always]
     default: "off"
-    description: "agy's answer as a voice note too: off, mirror (when you sent one), always."
+    description: "The agent's answer as a voice note too: off, mirror (when you sent one), always."
   tts_provider:
     type: str
     choices: ["", edge]
@@ -99,24 +127,24 @@ config_schema:
   share_soul:
     type: bool
     default: true
-    description: Give agy Hermes' personality (SOUL.md).
+    description: Give the agents Hermes' personality (SOUL.md).
   share_memory:
     type: bool
     default: true
-    description: Give agy Hermes' memory (MEMORY.md, USER.md).
+    description: Give the agents Hermes' memory (MEMORY.md, USER.md).
   share_thread:
     type: bool
     default: true
-    description: Give agy your recent Telegram thread with Hermes.
+    description: Give the agents your recent Telegram thread with Hermes.
   share_skills:
     type: bool
     default: true
-    description: Give agy Hermes' skills.
+    description: Give the agents Hermes' skills.
   share_mcp_servers:
     type: bool
     default: true
-    description: Give agy the MCP servers configured in Hermes.
+    description: Give the agents the MCP servers configured in Hermes.
   bridge_tools:
     type: list
-    default: [memory, session_search, skill_manage, cronjob_manage, text_to_speech, telegram_send, hermes_thread, agy_task]
-    description: Hermes tools agy gets through the bundled MCP bridge ([] turns the bridge off).
+    default: [memory, session_search, skill_manage, cronjob_manage, text_to_speech, telegram_send, hermes_thread, tasks]
+    description: Hermes tools the agents get through the bundled MCP bridge (tasks is agy_task / cc_task; [] turns the bridge off).
