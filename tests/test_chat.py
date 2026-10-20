@@ -913,6 +913,38 @@ class CommandTests(Base):
         self.assertEqual((self.adapter.sent("unpin"), self.adapter.sent("delete")),
                          ([("unpin", pin_id)], [("delete", pin_id)]))
 
+    async def test_banner_button_leaves_the_mode(self):
+        from telegram.ext import ApplicationHandlerStop
+        await plugin._cmd_on(self.oc, "")
+        _kind, _banner, markup = self.adapter.sent("bot_send")[-1]
+        button = markup.inline_keyboard[0][0]
+        self.assertEqual((button.text, button.callback_data), ("↩️ Quitter", "alt-agents:leave:opencode"))
+        pin = self.oc.store.load()["mode_pin"]
+        deleted = []
+
+        def press(data, chat=CHAT, message_id=pin):
+            async def answer():
+                pass
+
+            async def delete():
+                deleted.append(message_id)
+            message = SimpleNamespace(chat=SimpleNamespace(id=int(chat)), message_id=message_id, delete=delete)
+            update = SimpleNamespace(callback_query=SimpleNamespace(data=data, message=message, answer=answer))
+            return plugin._on_banner_button(update, None)
+
+        with self.assertRaises(ApplicationHandlerStop):
+            await press(button.callback_data, chat="999")  # another chat: nothing
+        self.assertTrue(self.oc.store.load()["sticky"])
+        with self.assertRaises(ApplicationHandlerStop):
+            await press(button.callback_data)
+        self.assertNotIn("sticky", self.oc.store.load())
+        self.assertIn(("unpin", pin), self.adapter.calls)
+        self.assertIn("Back to Hermes", self.adapter.sent()[-1][1])
+        self.assertEqual(deleted, [])  # the mode's own banner: deleted with the mode
+        with self.assertRaises(ApplicationHandlerStop):
+            await press(button.callback_data, message_id=pin)  # pressed again on a leftover banner
+        self.assertEqual(deleted, [pin])
+
     async def test_banner_follows_state_at_startup(self):
         self.agy.store.update(sticky=True)  # mode on, no banner yet (e.g. state from an older version)
         engine.schedule_startup(delay=0.1)

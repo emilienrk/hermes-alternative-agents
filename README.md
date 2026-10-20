@@ -46,7 +46,7 @@ The `/cc_…` (Claude Code) and `/oc_…` (opencode) commands are the same.
 | Command | |
 |---|---|
 | `/agy [message]` | Status card, or a message for agy |
-| `/agy_on`, `/agy_off` | agy mode on (pinned banner) / back to Hermes |
+| `/agy_on`, `/agy_off` | agy mode on (pinned banner, its ↩️ button = `/agy_off`) / back to Hermes |
 | `/agy_new [message]` | New agy conversation |
 | `/agy_stop` | Stop the running turn and drop the queue (`/stop` too, in agy mode) |
 | `/agy_model [n or name]` | Pick agy's model |

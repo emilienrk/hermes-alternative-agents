@@ -96,10 +96,34 @@ def configure(get):
     engine.configure(backends.make(cfg["backends"]))
 
 
-def _on_telegram_connect(_application, adapter):
+def _on_telegram_connect(application, adapter):
     # Called by the Telegram adapter at connect(): this is the gateway, and the live bot.
     engine.bind_adapter(adapter)
     engine.schedule_startup()
+    from telegram.ext import CallbackQueryHandler
+    # Group -1: ahead of the core's catch-all callback handler, which would take the button otherwise.
+    application.add_handler(CallbackQueryHandler(_on_banner_button, pattern=f"^{engine.BANNER_LEAVE}"), group=-1)
+
+
+async def _on_banner_button(update, _context):
+    """The banner's ↩️ button: the agent's mode off, as with /<prefix>_off."""
+    from telegram.ext import ApplicationHandlerStop
+    query = update.callback_query
+    agent = engine.AGENTS.get(query.data.removeprefix(engine.BANNER_LEAVE))
+    chat = getattr(getattr(query.message, "chat", None), "id", None)
+    try:
+        await query.answer()
+    except Exception:
+        logger.debug("alternative-agents: callback answer failed", exc_info=True)
+    if agent is not None and str(chat) == engine.TARGET_CHAT:
+        stale = agent.store.load().get("mode_pin") != query.message.message_id
+        await _say(await _cmd_off(agent, ""))
+        if stale:  # a banner the mode no longer tracks (it went off meanwhile): it goes too
+            try:
+                await query.message.delete()
+            except Exception:
+                logger.debug("alternative-agents: stale banner not deleted", exc_info=True)
+    raise ApplicationHandlerStop
 
 
 # ── routing ──

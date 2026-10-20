@@ -27,6 +27,7 @@ from .state import is_message
 logger = logging.getLogger(__name__)
 
 # Set by configure() from the plugin settings.
+BANNER_LEAVE = "alt-agents:leave:"  # + the agent's name: the banner's button
 TARGET_CHAT = ""
 TARGET = ""
 HARD_TIMEOUT_S = 35 * 60  # HARD_TIMEOUT_S, REACT_*: set by configure()
@@ -597,9 +598,10 @@ class Agent:
         chat, pinned = int(TARGET_CHAT), self.store.load().get("mode_pin")
         try:
             if sticky and not pinned:
-                from telegram import ReplyKeyboardRemove
-                # ReplyKeyboardRemove clears the input keyboard an earlier version used as the indicator.
-                msg = await bot.send_message(chat_id=chat, text=self.mode_banner(), reply_markup=ReplyKeyboardRemove())
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                leave = InlineKeyboardButton("↩️ Quitter", callback_data=BANNER_LEAVE + self.backend.name)
+                msg = await bot.send_message(chat_id=chat, text=self.mode_banner(),
+                                             reply_markup=InlineKeyboardMarkup([[leave]]))
                 await bot.pin_chat_message(chat_id=chat, message_id=msg.message_id, disable_notification=True)
                 self.store.update(mode_pin=msg.message_id)
             elif not sticky and pinned:
