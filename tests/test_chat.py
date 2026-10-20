@@ -601,7 +601,7 @@ class ClaudeTests(Base):
         self.assertIsNone(await plugin._cmd_on(self.claude, ""))
         self.assertNotIn("sticky", self.agy.store.load())
         self.assertIn(("unpin", agy_pin), self.adapter.calls)
-        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("✳️ Claude mode on · /cc_off"))
+        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("✳️ Claude mode on · for Hermes"))
         self.assertIn("Claude mode is on", await plugin._cmd_status(self.agy, ""))
         result = await self.dispatch(event("salut", msg_id="4"))
         self.assertEqual(result["action"], "skip")
@@ -918,7 +918,7 @@ class CommandTests(Base):
         await plugin._cmd_on(self.oc, "")
         _kind, _banner, markup = self.adapter.sent("bot_send")[-1]
         button = markup.inline_keyboard[0][0]
-        self.assertEqual((button.text, button.callback_data), ("↩️ Quitter", "alt-agents:leave:opencode"))
+        self.assertEqual((button.text, button.callback_data), ("Quitter", "alt-agents:leave:opencode"))
         pin = self.oc.store.load()["mode_pin"]
         deleted = []
 

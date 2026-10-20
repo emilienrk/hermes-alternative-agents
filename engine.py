@@ -196,10 +196,8 @@ class Agent:
         preset = self.store.load().get("preset")
         if preset:
             return (presets.settings(preset)["banner"]
-                    or f"{self.mark} /{preset} · {self.label} mode · {self.cmd('off')} to go back to Hermes".strip())
-        return (f"{self.mark} {self.label} mode on · {self.cmd('off')} to go back to Hermes\n".lstrip()
-                + f"Your messages, photos and voice notes go to {self.label}. For Hermes: \"Hermes …\" or a / "
-                f"command. Here /stop and /new act on {self.label}.")
+                    or f"{self.mark} /{preset} · {self.label} mode".strip())
+        return f"{self.mark} {self.label} mode on · for Hermes: \"Hermes …\" or a / command".strip()
 
     async def end_preset(self):
         """The conversation a preset opened is over: the mode stays, with its usual banner."""
@@ -599,7 +597,7 @@ class Agent:
         try:
             if sticky and not pinned:
                 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-                leave = InlineKeyboardButton("↩️ Quitter", callback_data=BANNER_LEAVE + self.backend.name)
+                leave = InlineKeyboardButton("Quitter", callback_data=BANNER_LEAVE + self.backend.name)
                 msg = await bot.send_message(chat_id=chat, text=self.mode_banner(),
                                              reply_markup=InlineKeyboardMarkup([[leave]]))
                 await bot.pin_chat_message(chat_id=chat, message_id=msg.message_id, disable_notification=True)
