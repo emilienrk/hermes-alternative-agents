@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import cfg
+from .state import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -187,19 +188,32 @@ class Workspace:
     def tools_section(self):
         notes = [f"- {TOOL_NOTES[t].format(chat_id=CHAT_ID, prefix=self.backend.prefix, agent=self.backend.label)}"
                  for t in TOOL_NOTES if t in cfg["bridge_tools"]]
-        if cfg["share_mcp_servers"]:
+        if self.mcp_on_demand():
+            notes.append("- The MCP servers configured in Hermes, through `mcp_tool_info` (their tools, listed in "
+                         "its description) then `mcp_tool_call`: same access as Hermes.")
+        elif cfg["share_mcp_servers"]:
             notes.append("- The MCP servers configured in Hermes: same access as Hermes.")
         return ("## Tools on top of yours (MCP server \"hermes\")\n" + "\n".join(notes)) if notes else ""
+
+    @staticmethod
+    def mcp_catalog():
+        return DATA_DIR / "mcp_catalog.json"
+
+    def mcp_on_demand(self):
+        """Hermes' MCP servers reached through the bridge, their tools described on demand."""
+        return cfg["share_mcp_servers"] and self.backend.name in cfg["mcp_on_demand"]
 
     def mcp_servers(self, http_type=False):
         """The bundled bridge and Hermes' MCP servers, as {name: launch spec}."""
         servers = {}
-        if cfg["bridge_tools"]:
-            servers["hermes"] = {"command": str(HERMES_PYTHON), "args": [str(BRIDGE)],
-                                 "env": {"HERMES_HOME": str(HERMES_HOME), "ALT_AGENTS_CHAT_ID": CHAT_ID,
-                                         "ALT_AGENTS_USER": USER, "ALT_AGENTS_TOOLS": ",".join(cfg["bridge_tools"]),
-                                         "ALT_AGENTS_TASK": json.dumps(self.backend.task_settings(), ensure_ascii=False)}}
-        if cfg["share_mcp_servers"]:
+        if cfg["bridge_tools"] or self.mcp_on_demand():
+            env = {"HERMES_HOME": str(HERMES_HOME), "ALT_AGENTS_CHAT_ID": CHAT_ID,
+                   "ALT_AGENTS_USER": USER, "ALT_AGENTS_TOOLS": ",".join(cfg["bridge_tools"]) or "none",
+                   "ALT_AGENTS_TASK": json.dumps(self.backend.task_settings(), ensure_ascii=False)}
+            if self.mcp_on_demand():
+                env.update(ALT_AGENTS_MCP_ON_DEMAND="1", ALT_AGENTS_MCP_CATALOG=str(self.mcp_catalog()))
+            servers["hermes"] = {"command": str(HERMES_PYTHON), "args": [str(BRIDGE)], "env": env}
+        if cfg["share_mcp_servers"] and not self.mcp_on_demand():
             for name, spec in hermes_mcp_servers(http_type).items():
                 servers.setdefault(name, spec)
         return servers

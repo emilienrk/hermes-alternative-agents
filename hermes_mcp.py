@@ -1,4 +1,4 @@
-"""MCP server giving the agents (agy, Claude Code) the Hermes tools they lack (stdio, launched by
+"""MCP server giving the agents (agy, Claude Code, opencode) the Hermes tools they lack (stdio, launched by
 the agent itself).
 
 They already have a terminal, files, a browser and web search. What they
@@ -37,6 +37,11 @@ ENABLED = set(filter(None, os.environ.get("ALT_AGENTS_TOOLS", "").split(","))) o
 TASK_SETTINGS = json.loads(os.environ.get("ALT_AGENTS_TASK") or "{}")
 AGENT = TASK_SETTINGS.get("label") or "agy"
 TASK_TOOL = f"{TASK_SETTINGS.get('prefix') or 'agy'}_task"
+# Hermes' MCP servers behind two tools, their schemas fetched when needed: an agent without deferred
+# tool loading would otherwise carry every MCP tool's description in each request.
+ON_DEMAND = os.environ.get("ALT_AGENTS_MCP_ON_DEMAND") == "1"
+CATALOG = Path(os.environ.get("ALT_AGENTS_MCP_CATALOG") or HERMES_HOME / "plugin-data/alternative-agents/mcp_catalog.json")
+SUMMARY_CHARS = 70
 
 
 # tool -> (module registering it, note appended to Hermes' description for the agent)
@@ -101,7 +106,29 @@ CUSTOM_TOOLS = {
     },
 }
 
+ON_DEMAND_TOOLS = {
+    "mcp_tool_info": {
+        "description": "Parameters and full description of MCP tools listed below (call it before mcp_tool_call).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"names": {"type": "array", "items": {"type": "string"},
+                                     "description": "Tools as listed: server.tool"}},
+            "required": ["names"],
+        },
+    },
+    "mcp_tool_call": {
+        "description": "Calls one of the MCP tools listed in mcp_tool_info.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "server.tool"},
+                           "arguments": {"type": "object", "description": "As described by mcp_tool_info."}},
+            "required": ["name"],
+        },
+    },
+}
+
 _loaded = {}
+_mcp = {}  # full tool name -> schema, once Hermes' MCP servers are connected
 
 
 def _boot():
@@ -137,11 +164,82 @@ def list_tools():
         tools.append({"name": name, "description": f"{schema.get('description', '')}\n\n{note}".strip(),
                       "inputSchema": schema.get("parameters") or {"type": "object", "properties": {}}})
     tools += [{"name": name, **spec} for name, spec in CUSTOM_TOOLS.items() if _enabled(name)]
+    if ON_DEMAND:
+        info = ON_DEMAND_TOOLS["mcp_tool_info"]
+        tools.append({"name": "mcp_tool_info", "inputSchema": info["inputSchema"],
+                      "description": f"{info['description']}\n\n{_listing()}"})
+        tools.append({"name": "mcp_tool_call", **ON_DEMAND_TOOLS["mcp_tool_call"]})
     return tools
+
+
+def _connect_mcp():
+    """Connect Hermes' MCP servers through its own client (config, auth) and refresh the catalog."""
+    if _mcp:
+        return _mcp
+    from tools.mcp_tool_discovery import discover_mcp_tools
+    from tools.registry import registry
+    for name in discover_mcp_tools():
+        entry = registry.get_entry(name)
+        if entry is not None:
+            _mcp[name] = entry.schema
+    catalog = {name: (schema.get("description") or "").strip() for name, schema in _mcp.items()}
+    try:
+        CATALOG.parent.mkdir(parents=True, exist_ok=True)
+        CATALOG.write_text(json.dumps(catalog, ensure_ascii=False))
+    except OSError as e:
+        print(f"hermes-mcp: cannot write {CATALOG}: {e}", file=sys.stderr)
+    return _mcp
+
+
+def _listing():
+    """The MCP tools by server, one line each, from the catalog (connecting once when there is none)."""
+    try:
+        catalog = json.loads(CATALOG.read_text())
+    except (OSError, ValueError):
+        catalog = {name: schema.get("description") or "" for name, schema in _connect_mcp().items()}
+    by_server = {}
+    for name, description in sorted(catalog.items()):
+        server, _, tool = name.removeprefix("mcp__").partition("__")
+        summary = " ".join(description.split())
+        if len(summary) > SUMMARY_CHARS:
+            summary = summary[:SUMMARY_CHARS - 1] + "…"
+        by_server.setdefault(server, []).append(f"  {server}.{tool}: {summary}" if summary else f"  {server}.{tool}")
+    if not by_server:
+        return "No MCP tools available."
+    return "MCP tools:\n" + "\n".join(line for lines in by_server.values() for line in lines)
+
+
+def _mcp_name(name):
+    name = str(name or "").strip()
+    server, dot, tool = name.partition(".")
+    return f"mcp__{server}__{tool}" if dot and not name.startswith("mcp__") else name
+
+
+def mcp_tool_info(names):
+    tools = _connect_mcp()
+    out = {}
+    for name in names or []:
+        schema = tools.get(_mcp_name(name))
+        out[name] = ({"description": schema.get("description", ""), "parameters": schema.get("parameters") or {}}
+                     if schema else {"error": "unknown tool"})
+    return out
+
+
+def mcp_tool_call(name, arguments):
+    full = _mcp_name(name)
+    if full not in _connect_mcp():
+        return json.dumps({"error": f"Unknown MCP tool: {name}"})
+    from tools.registry import registry
+    result = registry.dispatch(full, dict(arguments or {}))
+    return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
 
 
 def call_tool(name, args):
     args = dict(args or {})
+    if ON_DEMAND and name == "mcp_tool_info":
+        return json.dumps(mcp_tool_info(args.get("names")), ensure_ascii=False)
+    if ON_DEMAND and name == "mcp_tool_call":
+        return mcp_tool_call(args.get("name"), args.get("arguments"))
     if not _enabled(name):
         return json.dumps({"error": f"Tool disabled: {name}"})
     if name == TASK_TOOL:

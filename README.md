@@ -106,7 +106,8 @@ permission prompts.
 Measured with opencode 1.18.35: every request carries a fixed ~30 KB (opencode's system prompt ~9 KB,
 its tool descriptions ~21 KB), plus the list of skills (`share_skills`) and the MCP tools' descriptions
 (the bridge and Hermes' MCP servers, `share_mcp_servers`): with 88 skills and two MCP servers, ~165 KB
-in all, mostly served from DeepSeek's cache after the first request.
+in all when the MCP servers are given directly. Through the bridge (`mcp_on_demand`, the default for
+opencode), their 84 tools' ~78 KB of schemas become a one-line-per-tool listing.
 
 ## Presets
 
@@ -229,6 +230,7 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | **What the agents get from Hermes** | | |
 | `share_soul`, `share_memory`, `share_thread` | `true` | Personality, memory, recent Telegram thread, in the agents' context. |
 | `share_skills`, `share_mcp_servers` | `true` | Hermes' skills and MCP servers. |
+| `mcp_on_demand` | `[opencode]` | Agents that get Hermes' MCP servers through the bridge: two tools (`mcp_tool_info`, whose description lists every MCP tool in a line, and `mcp_tool_call`) instead of every tool's schema in each request. Claude Code defers MCP tools by itself. |
 | `bridge_tools` | all | Tools of the bundled bridge: `memory`, `session_search`, `skill_manage`, `cronjob_manage`, `text_to_speech`, `telegram_send`, `hermes_thread`, `tasks` (`agy_task` / `cc_task` / `oc_task`). `[]` turns it off. |
 
 `/agy_verbose`, `/agy_voice` (and `/cc_…`, `/oc_…`) override the display and voice defaults from Telegram, per agent.

@@ -47,6 +47,7 @@ DEFAULTS = {
     "share_thread": True,
     "share_skills": True,
     "share_mcp_servers": True,
+    "mcp_on_demand": ["opencode"],
     "bridge_tools": list(BRIDGE_TOOLS),
 }
 
@@ -78,6 +79,8 @@ def load(get):
         cfg["presets"] = {}
     backends = [cfg["backends"]] if isinstance(cfg["backends"], str) else cfg["backends"] or []
     cfg["backends"] = [b for b in BACKENDS if b in backends]
+    on_demand = cfg["mcp_on_demand"]
+    cfg["mcp_on_demand"] = [b for b in BACKENDS if b in ([on_demand] if isinstance(on_demand, str) else on_demand or [])]
     # "agy_task" was the tasks tool's name before Claude Code joined.
     tools = ["tasks" if t == "agy_task" else t for t in (cfg["bridge_tools"] or [])]
     cfg["bridge_tools"] = [t for t in BRIDGE_TOOLS if t in tools]

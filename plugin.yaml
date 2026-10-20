@@ -179,6 +179,10 @@ config_schema:
     type: bool
     default: true
     description: Give the agents the MCP servers configured in Hermes.
+  mcp_on_demand:
+    type: list
+    default: [opencode]
+    description: Agents that reach Hermes' MCP servers through the bridge (mcp_tool_info / mcp_tool_call), their tools described on demand instead of in every request. Claude Code defers MCP tools by itself.
   bridge_tools:
     type: list
     default: [memory, session_search, skill_manage, cronjob_manage, text_to_speech, telegram_send, hermes_thread, tasks]

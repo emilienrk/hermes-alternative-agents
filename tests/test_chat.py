@@ -12,9 +12,11 @@ import shutil
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
@@ -1272,11 +1274,13 @@ class WorkspaceTests(Base):
         ws = workspace.OpenCodeWorkspace(self.oc.backend, self.tmp / "ow")
         summary = ws.prepare()
         self.assertEqual(summary["errors"], [])
-        config = json.loads(ws.config_file.read_text())
-        self.assertEqual(sorted(config["mcp"]), ["hermes", "stats"])
-        self.assertEqual(config["mcp"]["stats"], {"type": "remote", "url": "https://x.y/mcp",
-                                                  "headers": {"Authorization": "Bearer t"}})
-        self.assertEqual(config["mcp"]["hermes"]["type"], "local")
+        oc_config = json.loads(ws.config_file.read_text())
+        self.assertEqual(sorted(oc_config["mcp"]), ["hermes"])  # Hermes' MCP servers through the bridge
+        self.assertEqual(oc_config["mcp"]["hermes"]["type"], "local")
+        env = oc_config["mcp"]["hermes"]["environment"]
+        self.assertEqual((env["ALT_AGENTS_MCP_ON_DEMAND"], env["ALT_AGENTS_MCP_CATALOG"]),
+                         ("1", str(ws.mcp_catalog())))
+        self.assertIn("`mcp_tool_info`", ws.rules_file.read_text())
         self.assertNotIn("sk-test", ws.config_file.read_text())
         self.assertEqual(oct(ws.config_file.stat().st_mode & 0o777), "0o600")
         self.assertEqual(ws.bridge_config()["args"], [str(workspace.BRIDGE)])
@@ -1284,6 +1288,52 @@ class WorkspaceTests(Base):
         for text in ("You are opencode", "`oc_task`", "`skill` tool", "[Context from the plugin]"):
             self.assertIn(text, rules)
         self.assertEqual((ws.skills_dir / "deploy").resolve(), skill.resolve())
+
+        config.cfg.update(mcp_on_demand=[])
+        try:
+            ws.prepare()
+        finally:
+            config.cfg.update(mcp_on_demand=["opencode"])
+        oc_config = json.loads(ws.config_file.read_text())
+        self.assertEqual(oc_config["mcp"]["stats"], {"type": "remote", "url": "https://x.y/mcp",
+                                                  "headers": {"Authorization": "Bearer t"}})
+        self.assertNotIn("ALT_AGENTS_MCP_ON_DEMAND", oc_config["mcp"]["hermes"]["environment"])
+
+    async def test_bridge_mcp_on_demand(self):
+        schemas = {"mcp__stats__get_steps": {"description": "Steps per day. " + "x" * 200,
+                                             "parameters": {"type": "object", "properties": {"day": {}}}},
+                   "mcp__money__overview": {"description": "Portfolio overview.", "parameters": {}}}
+        calls = []
+        registry = types.SimpleNamespace(
+            get_entry=lambda name: types.SimpleNamespace(schema=schemas[name]) if name in schemas else None,
+            dispatch=lambda name, args: calls.append((name, args)) or {"ok": name})
+        fakes = {"tools": types.ModuleType("tools"),
+                 "tools.mcp_tool_discovery": types.SimpleNamespace(discover_mcp_tools=lambda: list(schemas)),
+                 "tools.registry": types.SimpleNamespace(registry=registry)}
+        catalog = self.tmp / "catalog.json"
+        env = {"ALT_AGENTS_MCP_ON_DEMAND": "1", "ALT_AGENTS_MCP_CATALOG": str(catalog), "ALT_AGENTS_TOOLS": "none"}
+        stdout = sys.stdout
+        with mock.patch.dict(os.environ, env), mock.patch.dict(sys.modules, fakes):
+            spec = importlib.util.spec_from_file_location("bridge_under_test", PLUGIN_DIR / "hermes_mcp.py")
+            bridge = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(bridge)
+            finally:
+                sys.stdout = stdout  # the bridge hands stdout to MCP
+            tools = {t["name"]: t for t in bridge.list_tools()}
+            self.assertEqual(sorted(tools), ["mcp_tool_call", "mcp_tool_info"])
+            listing = tools["mcp_tool_info"]["description"]
+            self.assertIn("money.overview: Portfolio overview.", listing)
+            self.assertIn("stats.get_steps: Steps per day.", listing)
+            self.assertLess(len(listing), 400)  # summaries, not the schemas
+            self.assertTrue(catalog.exists())
+            info = json.loads(bridge.call_tool("mcp_tool_info", {"names": ["stats.get_steps", "nope.x"]}))
+            self.assertEqual(info["stats.get_steps"]["parameters"]["properties"], {"day": {}})
+            self.assertEqual(info["nope.x"], {"error": "unknown tool"})
+            self.assertEqual(json.loads(bridge.call_tool("mcp_tool_call", {"name": "money.overview"})),
+                             {"ok": "mcp__money__overview"})
+            self.assertIn("Unknown MCP tool", bridge.call_tool("mcp_tool_call", {"name": "money.nope"}))
+            self.assertEqual(calls, [("mcp__money__overview", {})])
 
 
 def datetime_now():
