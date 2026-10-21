@@ -856,19 +856,17 @@ class PresetTests(Base):
 
         await self.dispatch(event("what next?", msg_id="11"))
         await self.finish()
-        await plugin._cmd_off(self.oc, "")
-        await self.dispatch(event("/oc and then?", msg_id="12"))  # out of the mode, the same conversation
-        await self.finish()
-        self.assertEqual([(c["prompt"], c["conversation"]) for c in self.calls()[1:]],
-                         [("what next?", conv), ("and then?", conv)])  # no context block
-        self.assertTrue(all(c["env"]["OPENCODE_CONFIG_DIR"] == str(bare_dir) for c in self.calls()))
+        self.assertEqual((self.calls()[1]["prompt"], self.calls()[1]["conversation"]), ("what next?", conv))
+        self.assertEqual(self.calls()[1]["env"]["OPENCODE_CONFIG_DIR"], str(bare_dir))  # no context block
 
-        await plugin._cmd_new(self.oc, "")
+        self.assertIn("The /mouse conversation is over", await plugin._cmd_off(self.oc, ""))
+        self.assertNotIn("conversation_id", self.oc.store.load())
         await self.dispatch(event("/oc hello", msg_id="13"))
         await self.finish()
         normal = self.calls()[-1]
         self.assertNotEqual(normal["env"]["OPENCODE_CONFIG_DIR"], str(bare_dir))
         self.assertNotIn("--agent", normal["args"])
+        self.assertIsNone(normal["conversation"])
         self.assertTrue(normal["prompt"].endswith("hello") and normal["prompt"] != "hello")
 
         await plugin._pick_conv(self.oc, CHAT, conv)  # resumed: bare again

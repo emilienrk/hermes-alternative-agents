@@ -147,7 +147,7 @@ Fixed cost of a one-word turn, measured on this setup (88 skills, two MCP server
 A preset is a saved prompt that opens a conversation: `/<name>` turns on its agent's mode (opencode
 by default), starts a new conversation and sends the prompt as its first message, in the background.
 Telegram shows a waiting mark, then the agent's answer, never the prompt. Your next messages go on in
-that conversation, under the preset's pinned banner, until you leave the mode.
+that conversation, under the preset's pinned banner, until you leave the mode, which ends it.
 
 - `/preset` lists them (name, agent, length; never the prompt).
 - `/preset <name>` in reply to a message saves that message as the prompt (new or replaced). A new
@@ -161,8 +161,9 @@ nowhere else (the turn log says `(prompt /<name>)`). `/oc_retry` right after sen
 On opencode, a preset's conversation is bare: DeepSeek gets the prompt, then your messages as you
 wrote them, and nothing else. No opencode system prompt, rules, Hermes context or tools: that
 conversation runs from `<opencode_workspace>/.hermes-bare/`, whose agent has no tools and whose
-plugin empties the system prompt. It stays bare when you leave the mode and come back to it (`/oc`,
-`/oc_conv`); `/oc_new` starts an ordinary one. A preset with `bare: false` gets opencode's usual
+plugin empties the system prompt. Leaving the mode (`/oc_off`, the banner's button, another mode)
+ends that conversation: `/oc` then starts an ordinary one, and `/oc_conv` resumes the preset's, bare
+again. A preset with `bare: false` gets opencode's usual
 setup instead. On agy and Claude Code, the prompt opens a conversation with their usual setup.
 
 Optional settings, per preset:

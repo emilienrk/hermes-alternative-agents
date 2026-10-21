@@ -320,19 +320,27 @@ async def _cmd_on(agent, _raw_args: str):
     return agent.mode_banner()
 
 
+def _mode_off(agent):
+    """The agent's mode off; a preset's conversation ends with it (x_conv resumes it). Returns the preset."""
+    preset = agent.store.load().get("preset")
+    agent.store.update(sticky=None, preset=None, **({"conversation_id": None} if preset else {}))
+    return preset
+
+
 async def _modes_off(but=None):
     """One mode at a time: turn off the other agents' modes."""
     for other in engine.AGENTS.values():
         if other is not but and other.store.load().get("sticky"):
-            other.store.update(sticky=None, preset=None)
+            _mode_off(other)
             await other.set_mode_banner(False)
 
 
 async def _cmd_off(agent, _raw_args: str):
-    agent.store.update(sticky=None, preset=None)
+    preset = _mode_off(agent)
     await agent.set_mode_banner(False)
-    return (f"↩️ Back to Hermes. {agent.label} stays reachable with {agent.cmd()} <message> or by replying to "
-            "its messages.")
+    ended = f" The /{preset} conversation is over ({agent.cmd('conv')} resumes it)." if preset else ""
+    return (f"↩️ Back to Hermes.{ended} {agent.label} stays reachable with {agent.cmd()} <message> or by "
+            "replying to its messages.")
 
 
 async def _cmd_new(agent, raw_args: str):
@@ -499,7 +507,7 @@ async def _cmd_back(agent, raw_args: str):
 async def _hand_back(agent, message):
     """The agent's mode off; returns the message Hermes gets: the conversation's recap, then ``message``."""
     state = agent.store.load()
-    agent.store.update(sticky=None, preset=None)
+    _mode_off(agent)
     await agent.set_mode_banner(False)
     user = workspace.USER
     recap = await asyncio.to_thread(agent.store.recap, state.get("conversation_id"), HANDBACK_TURNS, user,
