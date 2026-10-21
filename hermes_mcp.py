@@ -43,6 +43,7 @@ ON_DEMAND = os.environ.get("ALT_AGENTS_MCP_ON_DEMAND") == "1"
 CATALOG = Path(os.environ.get("ALT_AGENTS_MCP_CATALOG")
                or HERMES_HOME / "plugin-data" / "alternative-agents" / "mcp_catalog.json")
 SUMMARY_CHARS = 70
+PASTE_CHARS = 8000  # as workspace.THREAD_PASTE_CHARS: a pasted document, shared by its size only
 
 
 # tool -> (module registering it, note appended to Hermes' description for the agent)
@@ -299,8 +300,10 @@ def hermes_thread(limit, max_chars=1500):
             content = msg.get("content")
             if msg.get("role") not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
                 continue
+            text = content.strip()
+            text = f"(long text, {len(text)} characters, not shared)" if len(text) > PASTE_CHARS else text[:max_chars]
             messages.append({"role": USER if msg["role"] == "user" else "Hermes",
-                             "at": _iso(msg.get("timestamp")), "text": content.strip()[:max_chars]})
+                             "at": _iso(msg.get("timestamp")), "text": text})
         return {"session_title": row.get("title") or "", "messages": messages[-limit:]}
     finally:
         release_or_close(db)

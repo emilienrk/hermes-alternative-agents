@@ -38,6 +38,8 @@ BRIDGE = Path(__file__).with_name("hermes_mcp.py")
 HERMES_PYTHON = Path(sys.executable)
 THREAD_MESSAGES = 12
 THREAD_MSG_CHARS = 400
+# Longer is a pasted document (a prompt, a log), not conversation: the agents get its size only.
+THREAD_PASTE_CHARS = 8000
 _PLAIN_NAME = re.compile(r"^[\w.-]+$")
 BARE_AGENT = "bare"
 # opencode builds the system prompt from the agent's prompt plus an environment block (model, cwd, date)
@@ -457,7 +459,9 @@ def thread_messages():
             text = " ".join(content.split())
             if not text:
                 continue
-            if len(text) > THREAD_MSG_CHARS:
+            if len(text) > THREAD_PASTE_CHARS:
+                text = f"(long text, {len(text)} characters, not shared)"
+            elif len(text) > THREAD_MSG_CHARS:
                 text = text[:THREAD_MSG_CHARS - 1] + "…"
             try:
                 ts = float(msg.get("timestamp"))
