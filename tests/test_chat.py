@@ -38,6 +38,11 @@ workspace = sys.modules["alt_agents_under_test.workspace"]
 config = sys.modules["alt_agents_under_test.config"]
 backends = sys.modules["alt_agents_under_test.backends"]
 presets = sys.modules["alt_agents_under_test.presets"]
+state = sys.modules["alt_agents_under_test.state"]
+tasks = importlib.import_module("alt_agents_under_test.tasks")
+# Never the real plugin data: an agent built during a test (plugin.register() rebuilds them all) gets
+# its state from state.DATA_DIR, and the live gateway reads it.
+state.DATA_DIR = workspace.DATA_DIR = Path(tempfile.mkdtemp(prefix="alternative-agents-data-"))
 CHAT = "424242"
 SETTINGS = {"chat_id": CHAT, "user_name": "Alex", "backends": ["agy", "claude", "opencode"]}
 FAKES = {"agy": str(TESTS_DIR / "fake_agy.py"), "claude": str(TESTS_DIR / "fake_claude.py"),
@@ -128,8 +133,11 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.cfg_saved = dict(config.cfg)
         self.saved = {(module, name): getattr(module, name) for module, name in (
             (engine, "TYPING_EVERY_S"), (engine, "STATUS_EVERY_S"), (engine, "_transcribe"),
-            (workspace, "HERMES_HOME"), (presets, "DIR"))}
+            (workspace, "HERMES_HOME"), (presets, "DIR"), (state, "DATA_DIR"), (workspace, "DATA_DIR"),
+            (tasks, "_registry_path"))}
         presets.DIR = self.tmp / "presets"
+        state.DATA_DIR = workspace.DATA_DIR = self.tmp
+        tasks._registry_path = lambda: self.tmp / "tasks.json"
         plugin.configure(lambda key, default=None: SETTINGS.get(key, default))
         hermes = self.tmp / "hermes"
         (hermes / "memories").mkdir(parents=True)
