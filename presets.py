@@ -42,6 +42,12 @@ def names():
         return []
 
 
+def find(command):
+    """The preset a command names ("" when none): Telegram and Hermes give "_" and "-" alike."""
+    key = command.replace("_", "-")
+    return next((n for n in (*names(), *(cfg.get("presets") or {})) if str(n).replace("_", "-") == key), "")
+
+
 def exists(name):
     """True when the preset has a non-empty prompt file (stat only)."""
     try:

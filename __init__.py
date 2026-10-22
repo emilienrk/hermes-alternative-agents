@@ -67,7 +67,7 @@ def register(ctx):
         for suffix, description, hint in COMMANDS:
             name = f"{agent.backend.prefix}-{suffix}" if suffix else agent.backend.prefix
             handler = globals()[f"_cmd_{suffix or 'status'}"]
-            ctx.register_command(name, handler=partial(handler, agent), args_hint=hint,
+            ctx.register_command(name, handler=_target_chat_only(partial(handler, agent)), args_hint=hint,
                                  description=description.format(label=agent.label, product=agent.backend.product))
     own = _own_commands()
     for name in presets.names():
@@ -77,13 +77,29 @@ def register(ctx):
             continue
         setting = presets.settings(name)
         agent = engine.AGENTS.get(setting["backend"])
-        ctx.register_command(name, handler=partial(_cmd_run_preset, name),
+        # Hermes looks commands up with "-" for "_", as Telegram's menu shows them.
+        ctx.register_command(name.replace("_", "-"), handler=_target_chat_only(partial(_cmd_run_preset, name)),
                              description=setting["description"] or f"New {agent.label if agent else '?'} "
                                                                    f"conversation opened by the /{name} preset")
-    ctx.register_command("preset", handler=_cmd_preset, args_hint="[name | rm name]",
+    ctx.register_command("preset", handler=_target_chat_only(_cmd_preset), args_hint="[name | rm name]",
                          description="Saved prompts opening a conversation (/preset <name> in reply to one)")
     ctx.register_hook("pre_gateway_dispatch", _on_dispatch)
     ctx.register_telegram_handler(_on_telegram_connect)
+
+
+def _target_chat(source):
+    return bool(engine.TARGET_CHAT and source is not None and getattr(source.platform, "value", None) == "telegram"
+                and str(source.chat_id) == engine.TARGET_CHAT)
+
+
+def _target_chat_only(handler):
+    """A command handler acting from the configured chat only, as the routing hook does: Hermes runs plugin
+    commands for any authorized sender, on any platform (Discord, email…)."""
+    async def command(raw_args="", source=None, **_context):
+        if not _target_chat(source):
+            return "⛔ alternative-agents takes commands from the Telegram chat set in its chat_id only."
+        return await handler(raw_args)
+    return command
 
 
 def configure(get):
@@ -116,9 +132,9 @@ async def _on_banner_button(update, _context):
     except Exception:
         logger.debug("alternative-agents: callback answer failed", exc_info=True)
     if agent is not None and str(chat) == engine.TARGET_CHAT:
-        stale = agent.store.load().get("mode_pin") != query.message.message_id
-        await _say(await _cmd_off(agent, ""))
-        if stale:  # a banner the mode no longer tracks (it went off meanwhile): it goes too
+        if agent.store.load().get("mode_pin") == query.message.message_id:
+            await _say(await _cmd_off(agent, ""))
+        else:  # a banner the mode no longer tracks (it went off meanwhile): it just goes
             try:
                 await query.message.delete()
             except Exception:
@@ -135,8 +151,7 @@ async def _on_dispatch(event=None, gateway=None, **_kwargs):
         source = getattr(event, "source", None)
         if source is None or getattr(event, "internal", False) or not getattr(event, "allow_gateway_control", True):
             return None
-        if (not engine.TARGET_CHAT or not engine.AGENTS or getattr(source.platform, "value", None) != "telegram"
-                or str(source.chat_id) != engine.TARGET_CHAT):
+        if not engine.AGENTS or not _target_chat(source):
             return None
         if gateway is not None:
             engine.bind_gateway(gateway)
@@ -176,8 +191,9 @@ def route(event, states):
                 return name[len(prefix) + 1:], agent, rest.strip()
         if name == "preset":
             return "presets", None, (rest.strip(), getattr(event, "reply_to_text", None) or "")
-        if name in config.cfg["presets"] or name in presets.names():
-            return "preset", None, name
+        preset = presets.find(name)
+        if preset:
+            return "preset", None, preset
         if sticky and name == "stop" and sticky.busy():
             return "stop", sticky, None
         if sticky and name == "new":

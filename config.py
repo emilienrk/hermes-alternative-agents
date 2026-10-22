@@ -78,12 +78,15 @@ def load(get):
     cfg["opencode_effort"] = str(cfg["opencode_effort"] or "").strip().lower()
     if not isinstance(cfg["presets"], dict):
         cfg["presets"] = {}
-    backends = [cfg["backends"]] if isinstance(cfg["backends"], str) else cfg["backends"] or []
-    cfg["backends"] = [b for b in BACKENDS if b in backends]
-    on_demand = cfg["mcp_on_demand"]
-    on_demand = [on_demand] if isinstance(on_demand, str) else on_demand or []
-    cfg["mcp_on_demand"] = [b for b in BACKENDS if b in on_demand]
+    cfg["backends"] = [b for b in BACKENDS if b in _as_list(cfg["backends"])]
+    cfg["mcp_on_demand"] = [b for b in BACKENDS if b in _as_list(cfg["mcp_on_demand"])]
+    cfg["skip_skills"] = _as_list(cfg["skip_skills"])
     # "agy_task" was the tasks tool's name before Claude Code joined.
-    tools = ["tasks" if t == "agy_task" else t for t in (cfg["bridge_tools"] or [])]
+    tools = ["tasks" if t == "agy_task" else t for t in _as_list(cfg["bridge_tools"])]
     cfg["bridge_tools"] = [t for t in BRIDGE_TOOLS if t in tools]
     return cfg
+
+
+def _as_list(value):
+    """A list setting, also given as one string."""
+    return [value] if isinstance(value, str) else list(value or [])
