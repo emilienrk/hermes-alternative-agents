@@ -61,7 +61,7 @@ class Store:
             return state
 
     def _save(self, state):
-        tmp = self.state_file.with_suffix(".tmp")
+        tmp = self.state_file.with_suffix(f".{os.getpid()}.tmp")  # task_run.py writes it too
         tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False))
         tmp.replace(self.state_file)
 
@@ -89,7 +89,8 @@ class Store:
             return
         with _lock:
             state = self.load()
-            state[key] = (state.get(key, []) + ids)[-MSGS_KEEP:]
+            known = state.get(key, [])
+            state[key] = (known + [i for i in ids if i not in known])[-MSGS_KEEP:]
             self._save(state)
 
     def log_turn(self, entry):

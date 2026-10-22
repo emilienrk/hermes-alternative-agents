@@ -77,7 +77,6 @@ class Run:
     def __init__(self, jobs, model, effort="", side=False, bare=False):
         self.jobs, self.model, self.effort, self.side = jobs, model, effort, side
         self.bare = bare  # the agent gets the messages and nothing else (backend.can_bare)
-        self.conversation_id = None
         self.started = time.time()
         self.proc = None
         self.context = None  # what the backend told the agent of Hermes this turn
@@ -86,6 +85,7 @@ class Run:
         self.status_msg = None
 
     def reset(self):
+        self.conversation_id = None  # a retry may run in another conversation
         self.actions = []
         self.current = None
         self.text = {}  # step -> text streamed so far
@@ -324,7 +324,8 @@ class Agent:
         finally:
             for task in side_tasks:
                 task.cancel()
-            store.update(inflight=None)
+            if not asyncio.current_task().cancelling():  # a gateway shutdown: restart_notice() says it
+                store.update(inflight=None)
 
         await asyncio.to_thread(backend.finished, run)
         body, attachments = self._reply(run, verbose, notice)
@@ -341,6 +342,8 @@ class Agent:
             "seconds": int(time.time() - run.started), "files": [p for p, _ in files],
             "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens,
             **({"cost_usd": run.cost} if run.cost else {})})
+        if (preset or bare) and not store.load().get("preset"):
+            store.update(conversation_id=None)  # the preset's mode was left during the turn: that conversation is over
 
     async def _compose(self, jobs, verbose, bare=False):
         """The message the agent receives, and the attachments copied to its inbox."""
@@ -423,6 +426,8 @@ class Agent:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, limit=STREAM_LIMIT,
             start_new_session=True)  # own process group: stop/timeout also reach the agent's children
         run.proc = proc
+        if run.stopped:  # stopped while the process was starting
+            _kill(proc)
         if stdin is not None:
             try:
                 proc.stdin.write(stdin.encode())
@@ -436,6 +441,9 @@ class Agent:
         except (asyncio.TimeoutError, ValueError):
             run.timed_out = True
             _kill(proc)
+        except BaseException:
+            _kill(proc)  # the agent must not outlive its turn
+            raise
         try:
             await asyncio.wait_for(proc.wait(), 10)
         except asyncio.TimeoutError:

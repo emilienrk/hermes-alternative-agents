@@ -733,6 +733,8 @@ class OpenCodeTests(Base):
         self.assertEqual([c["conversation"] for c in calls], ["ses_gone", None])
         self.assertIn("earlier answer", calls[1]["prompt"])
         self.assertIn("♻️ Conversation lost", self.adapter.sent()[-1][1])
+        fresh = store.load()["conversation_id"]  # the new conversation is kept for the next message
+        self.assertTrue(fresh and fresh != "ses_gone")
 
     async def test_balance_hint(self):
         self.mode("balance")
@@ -761,9 +763,12 @@ class OpenCodeTests(Base):
         ws.config_file.write_text(json.dumps({"mcp": {}}))
         report = await plugin._cmd_doctor(self.oc, "")
         self.assertIn("✓ opencode 9.9.9", report)
-        self.assertIn("✓ DeepSeek key in ", report)
         self.assertIn("✗ DeepSeek balance used up: 0.00 USD", report)
         self.assertIn("✓ opencode config valid", report)
+        self.assertIn("⚠️ DeepSeek key in ", report)  # readable by others
+        self.assertIn("needs a look", report)
+        self.oc.backend.env_file.chmod(0o600)
+        self.assertIn("✓ DeepSeek key in ", await plugin._cmd_doctor(self.oc, ""))
 
 
 class PresetTests(Base):
@@ -938,6 +943,37 @@ class PresetTests(Base):
         self.assertIn("mouse", names)
         self.assertIn("preset", names)
 
+    async def test_preset_name_with_underscore(self):
+        presets.save("big_mouse", self.SECRET)
+        self.assertEqual((await self.dispatch(event("/big_mouse", msg_id="10")))["action"], "skip")
+        await self.finish()
+        self.assertEqual(self.calls()[0]["prompt"], self.SECRET)
+        self.assertEqual(self.oc.store.load()["preset"], "big_mouse")
+        names = []
+        ctx = SimpleNamespace(get_config=lambda key, default=None: SETTINGS.get(key, default),
+                              register_command=lambda name, **kw: names.append(name),
+                              register_hook=lambda *a: None, register_telegram_handler=lambda *a: None)
+        plugin.register(ctx)
+        self.assertIn("big-mouse", names)  # Hermes' lookup form; Telegram's menu shows /big_mouse
+
+    async def test_commands_from_the_target_chat_only(self):
+        handlers = {}
+        ctx = SimpleNamespace(get_config=lambda key, default=None: SETTINGS.get(key, default),
+                              register_command=lambda name, handler, **kw: handlers.update({name: handler}),
+                              register_hook=lambda *a: None, register_telegram_handler=lambda *a: None)
+        plugin.register(ctx)
+        from hermes_cli.plugin_command_dispatch import invoke_plugin_command
+
+        def source(platform, chat=CHAT):
+            return SimpleNamespace(platform=SimpleNamespace(value=platform), chat_id=chat)
+        for name, src in (("oc", source("discord")), ("oc-new", source("telegram", "999")),
+                          ("preset", source("email")), ("oc", None)):
+            reply = await invoke_plugin_command(handlers[name], "rm -rf ~/x", source=src)
+            self.assertIn("⛔", reply)
+        self.assertNotIn("⛔", await invoke_plugin_command(handlers["oc-verbose"], "", source=source("telegram")))
+        await asyncio.sleep(0.2)
+        self.assertEqual(self.calls(), [])
+
 
 class CommandTests(Base):
     async def test_status_card_and_modes(self):
@@ -989,6 +1025,12 @@ class CommandTests(Base):
         with self.assertRaises(ApplicationHandlerStop):
             await press(button.callback_data, message_id=pin)  # pressed again on a leftover banner
         self.assertEqual(deleted, [pin])
+        await plugin._cmd_on(self.agy, "")
+        said = len(self.adapter.sent())
+        with self.assertRaises(ApplicationHandlerStop):
+            await press(button.callback_data, message_id=pin)  # the old opencode banner: agy mode stays
+        self.assertTrue(self.agy.store.load()["sticky"])
+        self.assertEqual(len(self.adapter.sent()), said)
 
     async def test_banner_follows_state_at_startup(self):
         self.agy.store.update(sticky=True)  # mode on, no banner yet (e.g. state from an older version)

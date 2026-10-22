@@ -17,7 +17,7 @@ from .state import Store
 
 logger = logging.getLogger(__name__)
 
-MAX_ARG_PROMPT = 100_000  # Linux caps one argv string at 128 KiB
+MAX_ARG_PROMPT = 100_000  # bytes: Linux caps one argv string at 128 KiB
 _PARAM_KEYS = ("CommandLine", "AbsolutePath", "TargetFile", "Url", "Query", "SearchPath",
                "DirectoryPath", "Pattern", "Path")
 _OC_PARAM_KEYS = ("command", "filePath", "url", "pattern", "path", "name", "description", "prompt")
@@ -118,7 +118,7 @@ class Agy(Backend):
         return message if conv else f"{self.workspace.first_turn_preamble()}\n\n{message}"
 
     def command(self, run, prompt, conv, fork=False):
-        if len(prompt) > MAX_ARG_PROMPT:
+        if len(prompt.encode()) > MAX_ARG_PROMPT:
             path = self.workspace.inbox / f"{datetime.now():%Y%m%d-%H%M%S}-message.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(prompt)
@@ -493,8 +493,11 @@ class OpenCode(Backend):
 
     def env(self, base, run=None):
         env = {k: v for k, v in base.items() if not k.startswith(("DEEPSEEK_", "OPENCODE_"))}
-        config_dir = self.workspace.bare_dir if run is not None and run.bare else self.workspace.config_dir
+        bare = run is not None and run.bare
+        config_dir = self.workspace.bare_dir if bare else self.workspace.config_dir
         env.update(self.ISOLATION, OPENCODE_CONFIG_DIR=str(config_dir))
+        if bare:  # opencode merges the user's ~/.config/opencode too; without tools, nothing else reads this
+            env["XDG_CONFIG_HOME"] = str(self.workspace.bare_dir / "xdg")
         key = self.api_key()
         if key:
             env["DEEPSEEK_API_KEY"] = key
@@ -506,6 +509,7 @@ class OpenCode(Backend):
             run.conversation_id = event["sessionID"]
         if kind == "step_start":
             run.step += 1
+            run.result = None  # an earlier step's end was not the turn's
         elif kind == "text" and part.get("text"):
             # A text part arrives whole once written; a step may hold several.
             said = run.text.get(run.step, "")
@@ -526,6 +530,7 @@ class OpenCode(Backend):
                               "usage": tokens}
         elif kind == "error":
             error = event.get("error") or {}
+            error = error if isinstance(error, dict) else {"name": str(error)}
             data = error.get("data") or {}
             text = str(data.get("message") or error.get("name") or "error")
             if data.get("statusCode"):
@@ -639,8 +644,8 @@ class OpenCode(Backend):
             mode = self.env_file.stat().st_mode & 0o777
         except OSError:
             mode = 0
-        lines.append(f"✓ DeepSeek key in {_home(str(self.env_file))}"
-                     + ("" if mode & 0o077 == 0 else f" (⚠️ mode {oct(mode)[2:]}: chmod 600 it)"))
+        lines.append(f"✓ DeepSeek key in {_home(str(self.env_file))}" if mode & 0o077 == 0
+                     else f"⚠️ DeepSeek key in {_home(str(self.env_file))}, mode {oct(mode)[2:]}: chmod 600 it")
         try:
             left = self.balance()
             empty = not any(_positive(total) for total in left.values())

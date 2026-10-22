@@ -118,9 +118,11 @@ The key reaches opencode through its environment only (never `opencode.json`); D
 the gateway's environment are removed. Without the key, `/oc` says so and runs nothing;
 `/oc_doctor` checks the key and the balance.
 
-opencode runs apart from your own opencode setup: `OPENCODE_CONFIG_DIR` points it at
-`<opencode_workspace>/.hermes/` instead of `~/.config/opencode`, project config is off, and so is
-what it would read of Claude Code's (`~/.claude/CLAUDE.md`, `~/.claude/skills`, `~/.agents/skills`).
+opencode runs mostly apart from your own opencode setup: `OPENCODE_CONFIG_DIR` points it at
+`<opencode_workspace>/.hermes/`, project config is off, and so is what it would read of Claude
+Code's (`~/.claude/CLAUDE.md`, `~/.claude/skills`, `~/.agents/skills`). opencode still merges your
+global `~/.config/opencode/opencode.json` (but not into bare conversations): keep there only what
+this agent may get too.
 That directory gets an `opencode.json`, an `AGENTS.md` (rules, tools, Hermes' personality) and
 `skills/`, links to Hermes' skills. Messages go through stdin (no size limit, nothing in `ps`), and
 it runs with `--auto`: no permission prompts.
