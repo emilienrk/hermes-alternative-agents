@@ -55,7 +55,7 @@ def _load():
 
 def _save(tasks):
     path = _registry_path()
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")  # the gateway and the bridges write it
     tmp.write_text(json.dumps(tasks, indent=2, ensure_ascii=False))
     tmp.replace(path)
 

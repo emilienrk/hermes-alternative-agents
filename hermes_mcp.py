@@ -185,6 +185,8 @@ def _connect_mcp():
         if entry is not None:
             _mcp[name] = entry.schema
     catalog = {name: (schema.get("description") or "").strip() for name, schema in _mcp.items()}
+    if not catalog:  # the servers are down: keep the last catalog
+        return _mcp
     try:
         CATALOG.parent.mkdir(parents=True, exist_ok=True)
         CATALOG.write_text(json.dumps(catalog, ensure_ascii=False))
@@ -198,7 +200,13 @@ def _listing():
     try:
         catalog = json.loads(CATALOG.read_text())
     except (OSError, ValueError):
-        catalog = {name: schema.get("description") or "" for name, schema in _connect_mcp().items()}
+        catalog = {}
+    if not catalog:
+        try:
+            catalog = {name: schema.get("description") or "" for name, schema in _connect_mcp().items()}
+        except Exception as e:  # tools/list must still give the bridge's other tools
+            print(f"hermes-mcp: MCP servers unavailable: {e}", file=sys.stderr)
+            return "MCP tools unavailable right now."
     by_server = {}
     for name, description in sorted(catalog.items()):
         server, _, tool = name.removeprefix("mcp__").partition("__")
@@ -271,8 +279,11 @@ def _load_by_path(module_name, filename):
 def task(args):
     tasks = _load_by_path("alternative_agents_tasks", "tasks.py")
     action = args.get("action")
+    backend = TASK_SETTINGS.get("backend") or "agy"
+    if action in ("remove", "run") and str(args.get("job_id")) not in {t["job_id"] for t in tasks.list_tasks(backend)}:
+        return {"success": False, "error": f"no {AGENT} task {args.get('job_id')}: list them first"}
     if action == "list":
-        return {"success": True, "tasks": tasks.list_tasks()}
+        return {"success": True, "tasks": tasks.list_tasks(backend)}
     if action == "create":
         return {"success": True, "task": tasks.create(str(args.get("schedule") or ""), str(args.get("prompt") or ""),
                                                       TASK_SETTINGS, str(args.get("name") or ""))}
@@ -312,7 +323,8 @@ def hermes_thread(limit, max_chars=1500):
 def _iso(ts):
     from datetime import datetime
     try:
-        return datetime.fromtimestamp(float(ts)).isoformat(timespec="minutes")
+        from hermes_time import get_timezone
+        return datetime.fromtimestamp(float(ts), get_timezone()).isoformat(timespec="minutes")
     except (TypeError, ValueError, OSError):
         return ""
 

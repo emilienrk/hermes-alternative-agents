@@ -11,9 +11,9 @@ plugin whose skills are links to Hermes' skills. Claude Code records the system 
 conversation's first request and keeps it, so what changes (time, memory, Hermes' thread)
 opens the message instead: turn_context().
 
-opencode runs apart from the user's own opencode setup too: OPENCODE_CONFIG_DIR points it at
-<cwd>/.hermes/ (opencode.json with the MCP servers, AGENTS.md, skills/ linking Hermes' skills)
-instead of ~/.config/opencode, and backends.py turns off what it would read of Claude Code's.
+opencode runs mostly apart from the user's own opencode setup: OPENCODE_CONFIG_DIR points it at
+<cwd>/.hermes/ (opencode.json with the MCP servers, AGENTS.md, skills/ linking Hermes' skills),
+merged with ~/.config/opencode/opencode.json, and backends.py turns off what it would read of Claude Code's.
 It gets the same turn_context() as Claude Code. A bare preset's conversation runs from
 <cwd>/.hermes-bare/ instead, where DeepSeek gets the messages and nothing else.
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 HOME = Path.home()
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or HOME / ".hermes")
 BRIDGE = Path(__file__).with_name("hermes_mcp.py")
-HERMES_PYTHON = Path(sys.executable)
+
 THREAD_MESSAGES = 12
 THREAD_MSG_CHARS = 400
 # Longer is a pasted document (a prompt, a log), not conversation: the agents get its size only.
@@ -76,6 +76,22 @@ def local_tz():
         return get_timezone()
     except Exception:
         return None
+
+
+def hermes_python():
+    """The interpreter of Hermes' dependency environment, for the bridge. A managed install runs the gateway
+    on a bare store Python whose children import none of Hermes' dependencies: Hermes' cron scripts get
+    this one for the same reason (cron/scheduler_script.py)."""
+    try:
+        import hermes_cli
+        from hermes_cli._launchers import resolve_store_python
+        from pm.environments import project_python
+        repo = Path(hermes_cli.__file__).resolve().parents[1]
+        if resolve_store_python(repo) is not None and project_python(repo).is_file():
+            return project_python(repo)
+    except Exception:
+        logger.debug("alternative-agents: no dependency environment found", exc_info=True)
+    return Path(sys.executable)
 
 
 def local_now():
@@ -218,12 +234,13 @@ class Workspace:
         """The bundled bridge and Hermes' MCP servers, as {name: launch spec}."""
         servers = {}
         if cfg["bridge_tools"] or self.mcp_on_demand():
-            env = {"HERMES_HOME": str(HERMES_HOME), "ALT_AGENTS_CHAT_ID": CHAT_ID,
+            # No lazy installs: one could execv the bridge onto the bare store Python.
+            env = {"HERMES_HOME": str(HERMES_HOME), "HERMES_DISABLE_LAZY_INSTALLS": "1", "ALT_AGENTS_CHAT_ID": CHAT_ID,
                    "ALT_AGENTS_USER": USER, "ALT_AGENTS_TOOLS": ",".join(cfg["bridge_tools"]) or "none",
                    "ALT_AGENTS_TASK": json.dumps(self.backend.task_settings(), ensure_ascii=False)}
             if self.mcp_on_demand():
                 env.update(ALT_AGENTS_MCP_ON_DEMAND="1", ALT_AGENTS_MCP_CATALOG=str(self.mcp_catalog()))
-            servers["hermes"] = {"command": str(HERMES_PYTHON), "args": [str(BRIDGE)], "env": env}
+            servers["hermes"] = {"command": str(hermes_python()), "args": [str(BRIDGE)], "env": env}
         if cfg["share_mcp_servers"] and not self.mcp_on_demand():
             for name, spec in hermes_mcp_servers(http_type).items():
                 servers.setdefault(name, spec)
@@ -487,7 +504,7 @@ def _thread_line(message):
 
 def _hhmm(ts):
     try:
-        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M") if ts else ""
+        return datetime.fromtimestamp(float(ts), local_tz()).strftime("%Y-%m-%d %H:%M") if ts else ""
     except (TypeError, ValueError, OSError):
         return ""
 
@@ -504,10 +521,12 @@ def hermes_skills():
         if any(p.startswith(".") for p in rel.parts) or name in SKILLS_SKIPPED or name in disabled:
             continue
         try:
-            head = skill_md.read_text().split("---", 2)
-            meta = (yaml.safe_load(head[1]) if len(head) == 3 else {}) or {}
+            text = skill_md.read_text()
+            head = text.split("---", 2) if text.startswith("---") else []
+            meta = yaml.safe_load(head[1]) if len(head) == 3 else {}
         except (OSError, yaml.YAMLError):
             continue
+        meta = meta if isinstance(meta, dict) else {}
         out.append((meta.get("name") or name, " ".join(str(meta.get("description") or "").split()), skill_md.parent))
     return out
 
