@@ -82,6 +82,7 @@ class Run:
         self.context = None  # what the backend told the agent of Hermes this turn
         self.reset()
         self.stopped = False
+        self.limited = ""  # why the turn was stopped at a spending limit (backend.over_limit)
         self.status_msg = None
 
     def reset(self):
@@ -164,7 +165,59 @@ def schedule_startup(delay=20):
 async def _startup():
     for agent in AGENTS.values():
         await agent.restart_notice()
+    await check_banner()
+    for agent in AGENTS.values():
         await agent.set_mode_banner(bool(agent.store.load().get("sticky")))
+
+
+async def check_banner():
+    """The banner pinned in the chat against the mode that is on: a state changed outside the chat (by
+    hand, by another process) must not leave a banner showing one mode while the messages go elsewhere."""
+    bot = getattr(adapter(), "_bot", None)
+    if bot is None or not TARGET_CHAT:
+        return
+    try:
+        top = (await bot.get_chat(int(TARGET_CHAT))).pinned_message  # the latest pin only
+    except Exception:
+        logger.warning("alternative-agents: cannot read the chat's pinned message", exc_info=True)
+        return
+    on = next((agent for agent in AGENTS.values() if agent.store.load().get("sticky")), None)
+    pin = on.store.load().get("mode_pin") if on else None
+    if top is None:
+        if pin:  # unpinned meanwhile: set_mode_banner() pins a new one
+            on.store.update(mode_pin=None)
+        return
+    shown = _banner_agent(top)
+    if shown is None or (on is not None and shown == on.backend.name and top.message_id == pin):
+        return  # the user's own pin, or the mode's banner
+    for agent in AGENTS.values():
+        if agent.store.load().get("mode_pin") == top.message_id:
+            agent.store.update(mode_pin=None)
+    if on is not None:
+        await on.set_mode_banner(False)  # its banner, if any, is not the one shown: a new one replaces it
+    for call in (bot.unpin_chat_message, bot.delete_message):
+        try:
+            await call(chat_id=int(TARGET_CHAT), message_id=top.message_id)
+        except Exception:
+            logger.debug("alternative-agents: %s failed", call.__name__, exc_info=True)
+    if on is not None and shown == on.backend.name:
+        return
+    label = AGENTS[shown].label if shown in AGENTS else shown
+    logger.warning("alternative-agents: the pinned banner showed %s mode, %s is on", shown,
+                   on.backend.name if on else "no mode")
+    await say(f"⚠️ The pinned banner showed {label} mode, but " + (
+        f"{on.label} mode is on: your messages go to {on.label} (its banner follows)." if on else
+        "no mode is on: your messages go to Hermes (banner removed)."))
+
+
+def _banner_agent(message):
+    """The agent whose mode banner ``message`` is (its button tells), or None."""
+    for row in getattr(getattr(message, "reply_markup", None), "inline_keyboard", None) or ():
+        for button in row:
+            data = getattr(button, "callback_data", None)
+            if isinstance(data, str) and data.startswith(BANNER_LEAVE):
+                return data.removeprefix(BANNER_LEAVE)
+    return None
 
 
 class Agent:
@@ -341,7 +394,7 @@ class Agent:
             "status": "STOPPED" if run.stopped else (run.result or {}).get("status", "NO_RESULT"),
             "seconds": int(time.time() - run.started), "files": [p for p, _ in files],
             "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens,
-            **({"cost_usd": run.cost} if run.cost else {})})
+            **({"cost_usd": run.cost} if run.cost else {}), **({"limit": run.limited} if run.limited else {})})
         if (preset or bare) and not store.load().get("preset"):
             store.update(conversation_id=None)  # the preset's mode was left during the turn: that conversation is over
 
@@ -464,6 +517,11 @@ class Agent:
                 continue
             known = run.conversation_id
             self.backend.on_event(run, event)
+            if not run.limited and run.result is None:  # not once the answer is in
+                run.limited = self.backend.over_limit(run)
+                if run.limited:  # stopped as /x_stop does: the conversation stays, "continue" goes on
+                    run.stopped = True
+                    _kill(proc)
             if run.conversation_id != known and not run.side:
                 self.store.update(conversation_id=run.conversation_id,
                                   **({"bare": run.conversation_id} if run.bare else {}))
@@ -507,7 +565,9 @@ class Agent:
         from gateway.platforms.base import BasePlatformAdapter
         result = run.result or {}
         attachments = []
-        if run.stopped:
+        if run.limited:
+            text = f"⏸ {self.label} stopped at its limit: {run.limited}. Reply \"continue\" to go on."
+        elif run.stopped:
             text = "🛑 Stopped."
         elif run.result is None:
             text = (f"⌛ No answer from {self.label} in {HARD_TIMEOUT_S // 60} min." if run.timed_out else
@@ -526,7 +586,7 @@ class Agent:
                 full.write_text(text)
                 text = text[:MAX_REPLY_CHARS] + "\n\n[…continued in the attached file]"
                 attachments.append(str(full))
-        if not verbose and run.actions and not run.stopped and (run.result or {}).get("status") != "SUCCESS":
+        if not verbose and run.actions and (run.limited or (not run.stopped and result.get("status") != "SUCCESS")):
             text += "\n\nLast actions:\n" + "\n".join(run.actions[-5:])
         footer = ""
         if cfg["footer"]:
@@ -684,7 +744,7 @@ class Agent:
             "response": ((run.result or {}).get("response") or "")[:2000],
             "status": "STOPPED" if run.stopped else (run.result or {}).get("status", "NO_RESULT"),
             "seconds": int(time.time() - run.started), "files": [p for p, _ in files], "tokens": run.tokens,
-            **({"cost_usd": run.cost} if run.cost else {})})
+            **({"cost_usd": run.cost} if run.cost else {}), **({"limit": run.limited} if run.limited else {})})
 
     # ── voice replies ──
 
@@ -758,6 +818,20 @@ def clean(text):
     lines = [line if line.lstrip().startswith("MEDIA:") else _home(_FILE_LINK.sub(r"\1", line))
              for line in text.splitlines()]
     return "\n".join(lines).strip()
+
+
+async def say(text, reply_to=None):
+    """A plugin message that is no agent's (a reply to it goes to Hermes)."""
+    if not text:
+        return
+    ad = adapter()
+    if ad is not None:
+        try:
+            if (await ad.send(TARGET_CHAT, text, reply_to=reply_to)).success:
+                return
+        except Exception:
+            logger.exception("alternative-agents: adapter send raised")
+    await asyncio.to_thread(_send_standalone, text)
 
 
 def _send_standalone(text):

@@ -59,6 +59,14 @@ def main():
                                                           "isRetryable": False}})
         sys.exit(1)
     tokens = {"total": 1290, "input": 1234, "output": 56, "reasoning": 0, "cache": {"write": 0, "read": 1000}}
+    if mode == "runaway":  # one action and $0.01 per step, for a long while
+        for i in range(100):
+            emit("step_start", {"type": "step-start"})
+            emit("tool_use", {"type": "tool", "tool": "bash", "callID": f"call_{i}", "state": {
+                "status": "completed", "input": {"command": f"echo {i}"}, "output": f"{i}\n", "title": "echo"}})
+            emit("step_finish", {"type": "step-finish", "reason": "tool-calls", "tokens": tokens, "cost": 0.01})
+            time.sleep(0.2)
+        return
     emit("step_start", {"type": "step-start"})
     emit("text", {"type": "text", "text": "Looking."})
     time.sleep({"slow": 60, "verbose": 9}.get(mode, 0.2))

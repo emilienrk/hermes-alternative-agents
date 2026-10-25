@@ -96,8 +96,12 @@ def main():
     store.log_turn({"task": task["name"], "model": run.model, "conversation_id": run.conversation_id,
                     "message": task["prompt"][:500], "response": response[:2000],
                     "status": result.get("status", "NO_RESULT"), "seconds": int(time.time() - run.started),
-                    "tokens": run.tokens, **({"cost_usd": run.cost} if run.cost else {})})
+                    "tokens": run.tokens, **({"cost_usd": run.cost} if run.cost else {}),
+                    **({"limit": run.limited} if run.limited else {})})
     head = f"{agent.mark} {agent.label} · {task['name']}".strip()
+    if run.limited:
+        print(f"{head}\n\n⏸ Stopped at its limit: {run.limited}.")
+        return 1
     if run.failed():
         print(f"{head}\n\n❌ {error or run.error_text() or 'no output'}"[:3500])
         return 1

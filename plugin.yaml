@@ -106,6 +106,14 @@ config_schema:
     description: >
       File holding DEEPSEEK_API_KEY=… (mode 600), a key of its own for opencode: it reaches
       opencode through its environment, never its config. Without it, /oc runs nothing.
+  opencode_max_actions:
+    type: int
+    default: 30
+    description: An opencode turn stops after this many actions (0 for no limit); "continue" goes on.
+  opencode_max_cost_usd:
+    type: float
+    default: 0.05
+    description: An opencode turn stops once it has cost this many dollars (0 for no limit); "continue" goes on.
   presets:
     type: dict
     default: {}

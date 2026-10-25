@@ -29,6 +29,9 @@ DEFAULTS = {
     "opencode_effort": "",
     "opencode_mark": "🐋",
     "opencode_env_file": "~/.hermes/alternative-agents/.env",
+    # a turn stops at either (0: no limit)
+    "opencode_max_actions": 30,
+    "opencode_max_cost_usd": 0.05,
     # /<preset>: {name: {backend, banner, description, bare}}, the prompts being files (presets.py)
     "presets": {},
     # display
@@ -69,6 +72,11 @@ def load(get):
         cfg["timeout_minutes"] = max(1, int(cfg["timeout_minutes"]))
     except (TypeError, ValueError):
         cfg["timeout_minutes"] = DEFAULTS["timeout_minutes"]
+    for key, kind in (("opencode_max_actions", int), ("opencode_max_cost_usd", float)):
+        try:
+            cfg[key] = max(0, kind(cfg[key]))
+        except (TypeError, ValueError):
+            cfg[key] = DEFAULTS[key]
     if cfg["voice_reply"] not in VOICE_REPLY_MODES:
         cfg["voice_reply"] = "off"
     if cfg["voice_input"] not in ("direct", "local"):

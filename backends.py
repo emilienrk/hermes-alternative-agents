@@ -67,6 +67,10 @@ class Backend:
         """Why no turn can start (e.g. a missing key), or ""; checked before each run."""
         return ""
 
+    def over_limit(self, run):
+        """Why the running turn must stop now (a spending limit reached), or ""; checked at each event."""
+        return ""
+
     def _with_context(self, run, message, conv):
         """The message after the context block; blocking (reads Hermes' state)."""
         state = self.store.load()
@@ -444,12 +448,14 @@ class OpenCode(Backend):
         super().__init__()
         self._models_cache = {"at": 0.0, "models": [], "variants": {}}
         self.env_file = Path()
+        self.max_actions, self.max_cost = 0, 0.0
 
     def configure(self):
         super().configure()
         self.bin = self._find_bin(cfg["opencode_path"], Path.home() / ".local/bin/opencode")
         self.mark = str(cfg["opencode_mark"] or "")
         self.env_file = Path(os.path.expanduser(str(cfg["opencode_env_file"] or "")))
+        self.max_actions, self.max_cost = cfg["opencode_max_actions"], cfg["opencode_max_cost_usd"]
         self.store.default_model = self._full_id(cfg["opencode_model"] or self.default_model)
         self.store.default_effort = cfg["opencode_effort"]
         self.workspace = workspace.OpenCodeWorkspace(self, cfg["opencode_workspace"] or "~/opencode-chat")
@@ -471,6 +477,14 @@ class OpenCode(Backend):
             return f"No DeepSeek key: {_home(str(self.env_file))} is missing (DEEPSEEK_API_KEY=…, mode 600)."
         if not self.api_key():
             return f"No DeepSeek key: DEEPSEEK_API_KEY is missing from {_home(str(self.env_file))}."
+        return ""
+
+    def over_limit(self, run):
+        spent = f"{len(run.actions)} actions, ${run.cost:.3f}"
+        if self.max_cost and run.cost >= self.max_cost:
+            return f"{spent} (opencode_max_cost_usd: {self.max_cost:g})"
+        if self.max_actions and len(run.actions) >= self.max_actions:
+            return f"{spent} (opencode_max_actions: {self.max_actions})"
         return ""
 
     # ── a turn ──

@@ -133,7 +133,7 @@ async def _on_banner_button(update, _context):
         logger.debug("alternative-agents: callback answer failed", exc_info=True)
     if agent is not None and str(chat) == engine.TARGET_CHAT:
         if agent.store.load().get("mode_pin") == query.message.message_id:
-            await _say(await _cmd_off(agent, ""))
+            await engine.say(await _cmd_off(agent, ""))
         else:  # a banner the mode no longer tracks (it went off meanwhile): it just goes
             try:
                 await query.message.delete()
@@ -262,24 +262,10 @@ async def _act(decision, event):
         await agent.end_preset()
         await agent.send(f"🆕 New {agent.label} conversation from the next message.", reply_to=event.message_id)
     elif kind == "preset":
-        await _say(await _run_preset(payload, event.message_id), event.message_id)
+        await engine.say(await _run_preset(payload, event.message_id), event.message_id)
     elif kind == "presets":
         args, reply_text = payload
-        await _say(await asyncio.to_thread(_manage_presets, args, reply_text), event.message_id)
-
-
-async def _say(text, reply_to=None):
-    """A plugin message that is no agent's (a reply to it goes to Hermes)."""
-    if not text:
-        return
-    ad = engine.adapter()
-    if ad is not None:
-        try:
-            if (await ad.send(engine.TARGET_CHAT, text, reply_to=reply_to)).success:
-                return
-        except Exception:
-            logger.exception("alternative-agents: adapter send raised")
-    await asyncio.to_thread(engine._send_standalone, text)
+        await engine.say(await asyncio.to_thread(_manage_presets, args, reply_text), event.message_id)
 
 
 # ── commands (each takes the agent first: register() binds it) ──

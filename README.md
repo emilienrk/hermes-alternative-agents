@@ -44,7 +44,9 @@ Only from the one Telegram chat you configure (examples with agy; `/cc…` and `
 | anything else | Hermes, as usual |
 
 One mode at a time: `/cc_on` turns agy mode off, and the other way round. While a mode is on, a
-banner stays pinned at the top of the chat; its button (**Back to Hermes**, `leave_button`) goes back to Hermes, as `/agy_off` does. In agy mode, `/stop` and `/new` act on agy. A reply
+banner stays pinned at the top of the chat; its button (**Back to Hermes**, `leave_button`) goes back to Hermes, as `/agy_off` does.
+At each gateway start the pinned banner is checked against the mode that is on, and fixed (with a
+message) when it shows another one. In agy mode, `/stop` and `/new` act on agy. A reply
 still reaches the agent you reply to, whatever the mode.
 
 Photos, files and voice notes ride along. Voice notes go to agy as audio (default) or are
@@ -117,6 +119,9 @@ echo 'DEEPSEEK_API_KEY=sk-…' >> ~/.hermes/alternative-agents/.env
 The key reaches opencode through its environment only (never `opencode.json`); DeepSeek keys from
 the gateway's environment are removed. Without the key, `/oc` says so and runs nothing;
 `/oc_doctor` checks the key and the balance.
+
+A turn stops at 30 actions or $0.05 (`opencode_max_actions`, `opencode_max_cost_usd`), with the
+actions so far; the conversation stays, "continue" goes on.
 
 opencode runs mostly apart from your own opencode setup: `OPENCODE_CONFIG_DIR` points it at
 `<opencode_workspace>/.hermes/`, project config is off, and so is what it would read of Claude
@@ -263,6 +268,8 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | `opencode_effort` | `""` | Model variant until `/oc_effort` picks another (`""`: the model's default). |
 | `opencode_mark` | `🐋` | Emoji in opencode's footer, status and banner. |
 | `opencode_env_file` | `~/.hermes/alternative-agents/.env` | Holds `DEEPSEEK_API_KEY`, opencode's own key. |
+| `opencode_max_actions` | `30` | A turn stops after this many actions (`0`: no limit). |
+| `opencode_max_cost_usd` | `0.05` | A turn stops once it has cost this much (`0`: no limit). |
 | **Display** | | |
 | `react_working`, `react_queued` | `👀`, `✍` | Reactions on your messages while an agent works / while they wait (`""` for none). |
 | `footer` | `true` | `— 🛸 agy · 2 min` under answers. |

@@ -56,6 +56,10 @@ def ok(message_id=None):
 class FakeBot:
     def __init__(self, adapter):
         self.adapter = adapter
+        self.pinned = None  # the chat's latest pin, as get_chat gives it
+
+    async def get_chat(self, chat_id):
+        return SimpleNamespace(pinned_message=self.pinned)
 
     async def send_message(self, chat_id, text, reply_markup=None, **kw):
         self.adapter.calls.append(("bot_send", text, reply_markup))
@@ -779,6 +783,51 @@ class OpenCodeTests(Base):
         self.assertIn("✓ DeepSeek key in ", await plugin._cmd_doctor(self.oc, ""))
 
 
+    async def test_turn_stopped_at_its_action_limit(self):
+        self.oc.backend.max_actions = 3
+        self.mode("runaway")
+        started = time.time()
+        await self.dispatch(event("/oc tidy everything", msg_id="7"))
+        await self.finish()
+        self.assertLess(time.time() - started, 10)
+        reply = self.adapter.sent()[-1][1]
+        self.assertTrue(reply.startswith("⏸ opencode stopped at its limit: 3 actions, $0.020 "
+                                         "(opencode_max_actions: 3). Reply \"continue\" to go on."), reply)
+        self.assertIn("Last actions:\n✓ bash echo 0\n✓ bash echo 1\n✓ bash echo 2", reply)
+        log = json.loads(self.oc.store.turns_log.read_text().splitlines()[-1])
+        self.assertEqual((log["status"], len(log["actions"])), ("STOPPED", 3))
+        self.assertIn("opencode_max_actions", log["limit"])
+        conv = self.oc.store.load()["conversation_id"]
+
+        self.mode("ok")
+        await self.dispatch(event("/oc continue", msg_id="8"))
+        await self.finish()
+        self.assertEqual(self.calls()[-1]["conversation"], conv)
+        self.assertIn("ECHO:", self.adapter.sent()[-1][1])
+
+    async def test_turn_stopped_at_its_cost_limit(self):
+        self.oc.backend.max_cost = 0.025
+        self.oc.backend.max_actions = 0
+        self.mode("runaway")
+        await self.dispatch(event("/oc tidy everything", msg_id="7"))
+        await self.finish()
+        reply = self.adapter.sent()[-1][1]
+        self.assertIn("stopped at its limit: 3 actions, $0.030 (opencode_max_cost_usd: 0.025)", reply)
+
+    async def test_limits_spare_a_finished_answer(self):
+        self.oc.backend.max_cost = 0.0005  # what the whole turn costs: reached with the answer in
+        await self.dispatch(event("/oc hello", msg_id="7"))
+        await self.finish()
+        self.assertIn("ECHO:", self.adapter.sent()[-1][1])
+
+    def test_limit_settings(self):
+        values = {"opencode_max_actions": "12", "opencode_max_cost_usd": "-1"}
+        cfg = config.load(lambda key, default=None: values.get(key, default))
+        self.assertEqual((cfg["opencode_max_actions"], cfg["opencode_max_cost_usd"]), (12, 0))
+        values = {"opencode_max_actions": "lots"}
+        self.assertEqual(config.load(lambda key, default=None: values.get(key, default))["opencode_max_actions"], 30)
+
+
 class PresetTests(Base):
     SECRET = "SECRET-PROMPT-1234 you are a mouse"
 
@@ -981,6 +1030,57 @@ class PresetTests(Base):
         self.assertNotIn("⛔", await invoke_plugin_command(handlers["oc-verbose"], "", source=source("telegram")))
         await asyncio.sleep(0.2)
         self.assertEqual(self.calls(), [])
+
+
+class BannerCheckTests(Base):
+    async def pin_banner(self, agent):
+        """The agent's banner, as Telegram gives the chat's pinned message."""
+        await plugin._cmd_on(agent, "")
+        _kind, _text, markup = self.adapter.sent("bot_send")[-1]
+        return SimpleNamespace(message_id=agent.store.load()["mode_pin"], reply_markup=markup)
+
+    async def test_banner_of_another_mode(self):
+        # The chat shows agy's banner while opencode's mode is on (its state changed outside the chat).
+        banner = self.adapter._bot.pinned = await self.pin_banner(self.agy)
+        self.agy.store.update(sticky=None, mode_pin=None)
+        self.oc.store.update(sticky=True, mode_pin=777)
+        self.adapter.calls.clear()
+        await engine._startup()
+        self.assertIn(("unpin", banner.message_id), self.adapter.calls)
+        self.assertIn(("delete", banner.message_id), self.adapter.calls)
+        self.assertIn(("unpin", 777), self.adapter.calls)
+        _kind, text, _markup = self.adapter.sent("bot_send")[-1]
+        self.assertTrue(text.startswith("🐋 opencode mode on"))
+        self.assertEqual(self.adapter.sent("pin"), [("pin", self.oc.store.load()["mode_pin"], True)])
+        notice = self.adapter.sent()[-1][1]
+        self.assertIn("The pinned banner showed agy mode, but opencode mode is on", notice)
+
+    async def test_banner_without_a_mode(self):
+        banner = self.adapter._bot.pinned = await self.pin_banner(self.claude)
+        self.claude.store.update(sticky=None)
+        self.adapter.calls.clear()
+        await engine._startup()
+        self.assertEqual(self.adapter.sent("delete"), [("delete", banner.message_id)])
+        self.assertNotIn("mode_pin", self.claude.store.load())
+        self.assertEqual(self.adapter.sent("bot_send"), [])
+        self.assertIn("no mode is on: your messages go to Hermes", self.adapter.sent()[-1][1])
+
+    async def test_right_banner_or_the_users_pin(self):
+        self.adapter._bot.pinned = await self.pin_banner(self.agy)
+        self.adapter.calls.clear()
+        await engine._startup()
+        self.assertEqual(self.adapter.calls, [])
+        self.adapter._bot.pinned = SimpleNamespace(message_id=5, reply_markup=None)  # pinned by the user
+        await engine._startup()
+        self.assertEqual(self.adapter.calls, [])
+
+    async def test_banner_unpinned_meanwhile(self):
+        await self.pin_banner(self.agy)
+        self.adapter._bot.pinned = None
+        self.adapter.calls.clear()
+        await engine._startup()
+        self.assertEqual(len(self.adapter.sent("pin")), 1)
+        self.assertEqual(self.adapter.sent("send"), [])
 
 
 class CommandTests(Base):
