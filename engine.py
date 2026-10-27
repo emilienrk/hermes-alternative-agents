@@ -74,9 +74,10 @@ class Job:
 class Run:
     """The live turn."""
 
-    def __init__(self, jobs, model, effort="", side=False, bare=False):
+    def __init__(self, jobs, model, effort="", side=False, bare=False, private=""):
         self.jobs, self.model, self.effort, self.side = jobs, model, effort, side
         self.bare = bare  # the agent gets the messages and nothing else (backend.can_bare)
+        self.private = private  # the preset whose conversation this is: deleted once over (forget_private)
         self.started = time.time()
         self.proc = None
         self.context = None  # what the backend told the agent of Hermes this turn
@@ -165,6 +166,7 @@ def schedule_startup(delay=20):
 async def _startup():
     for agent in AGENTS.values():
         await agent.restart_notice()
+        await agent.forget_private()  # one left over by a turn the restart cut short
     await check_banner()
     for agent in AGENTS.values():
         await agent.set_mode_banner(bool(agent.store.load().get("sticky")))
@@ -262,6 +264,29 @@ class Agent:
         if state.get("sticky"):
             await self.set_mode_banner(False)
             await self.set_mode_banner(True)
+        await self.forget_private()
+
+    async def forget_private(self):
+        """Delete the conversations presets opened once they are over: the agent's own record of them
+        (backend.forget) and a retry of their last message. Their turns are logged without text."""
+        state = self.store.load()
+        live = {state.get("conversation_id")} if state.get("preset") else set()
+        if self.run is not None:
+            live.add(self.run.conversation_id)  # a turn still writing to it: deleted after it
+        gone = set()
+        for cid in state.get("private") or []:
+            if cid not in live and await asyncio.to_thread(self.backend.forget, cid):
+                gone.add(cid)
+        if not gone and (state.get("preset") or not (state.get("last_turn") or {}).get("private")):
+            return
+        state = self.store.load()
+        changes = {"private": [c for c in state.get("private") or [] if c not in gone] or None}
+        if not state.get("preset") and (state.get("last_turn") or {}).get("private"):
+            changes["last_turn"] = None
+        for key in ("conversation_id", "bare"):
+            if state.get(key) in gone:
+                changes[key] = None
+        self.store.update(**changes)
 
     async def restart_notice(self):
         inflight = self.store.load().get("inflight")
@@ -328,6 +353,10 @@ class Agent:
                 for job in jobs:
                     if job.message_id:
                         await react(job.message_id, None)
+            try:
+                await self.forget_private()
+            except Exception:
+                logger.exception("alternative-agents: %s private conversation not deleted", self.backend.name)
 
     # ── turn ──
 
@@ -340,19 +369,21 @@ class Agent:
         verbose = store.verbose(state)
         anchor = next((job.message_id for job in reversed(jobs) if job.message_id), None)
         preset = jobs[0].preset
+        private = preset or state.get("preset") or ""
         # A bare preset's conversation holds its prompt and the user's messages, and nothing else.
         bare = backend.can_bare and (presets.settings(preset)["bare"] if preset
                                      else bool(conv) and conv == state.get("bare"))
-        run = self.run = Run(jobs, store.model(state), store.effort(state), bare=bare)
+        run = self.run = Run(jobs, store.model(state), store.effort(state), bare=bare, private=private)
         for job in jobs:
             if job.message_id and REACT_WORKING:
                 await react(job.message_id, REACT_WORKING)
 
         message, files = await self._compose(jobs, verbose, bare)
         await asyncio.to_thread(backend.workspace.prepare)
-        shown = f"(prompt /{preset})" if preset else message  # what is recorded of the message
+        shown = f"(/{private} conversation)" if private else message  # what is recorded of the message
         store.update(inflight={"message": shown[:500], "at": datetime.now().isoformat(timespec="seconds")},
-                     last_turn={"preset": preset} if preset else {"text": message, "files": files})
+                     last_turn={**({"preset": preset} if preset else {"text": message, "files": files}),
+                                **({"private": True} if private else {})})
         # A preset's prompt goes as is: no context block, no rules pointer.
         prompt = message if preset or bare else await asyncio.to_thread(backend.prompt, run, message, conv)
 
@@ -387,15 +418,17 @@ class Agent:
         await self.deliver(body, attachments, anchor)
         if self._speaks(state, jobs) and not run.failed() and run.result:
             await self._speak(_spoken_text(run.result.get("response") or ""), anchor)
+        # A preset's conversation leaves no text behind: no message, answer or conversation id.
         await asyncio.to_thread(store.log_turn, {
             "model": run.model, **({"effort": run.effort} if run.effort else {}),
-            "conversation_id": store.load().get("conversation_id"),
-            "message": shown[:500], "response": ((run.result or {}).get("response") or "")[:2000],
+            **({"preset": private} if private else {
+                "conversation_id": store.load().get("conversation_id"), "message": shown[:500],
+                "response": ((run.result or {}).get("response") or "")[:2000], "files": [p for p, _ in files],
+                "actions": run.actions}),
             "status": "STOPPED" if run.stopped else (run.result or {}).get("status", "NO_RESULT"),
-            "seconds": int(time.time() - run.started), "files": [p for p, _ in files],
-            "actions": run.actions, **({"preset": preset} if preset else {}), "tokens": run.tokens,
+            "seconds": int(time.time() - run.started), "tokens": run.tokens,
             **({"cost_usd": run.cost} if run.cost else {}), **({"limit": run.limited} if run.limited else {})})
-        if (preset or bare) and not store.load().get("preset"):
+        if private and not store.load().get("preset"):
             store.update(conversation_id=None)  # the preset's mode was left during the turn: that conversation is over
 
     async def _compose(self, jobs, verbose, bare=False):
@@ -523,8 +556,11 @@ class Agent:
                     run.stopped = True
                     _kill(proc)
             if run.conversation_id != known and not run.side:
+                private = self.store.load().get("private") or []
                 self.store.update(conversation_id=run.conversation_id,
-                                  **({"bare": run.conversation_id} if run.bare else {}))
+                                  **({"bare": run.conversation_id} if run.bare else {}),
+                                  **({"private": [*private, run.conversation_id]}
+                                     if run.private and run.conversation_id not in private else {}))
 
     # ── Telegram output ──
 
@@ -721,7 +757,7 @@ class Agent:
         message, files = await self._compose([job], False)
         fork = False
         if not conv:
-            main = state.get("conversation_id")
+            main = None if state.get("preset") else state.get("conversation_id")  # a preset's stays apart
             if backend.can_fork and main:
                 conv, fork = main, True
                 message = BTW_FORK_HEAD.format(user=workspace.USER) + message

@@ -29,6 +29,10 @@ def main():
             if "--verbose" in args:
                 print(json.dumps({"id": model.split("/")[1], **info}, indent=2))
         return
+    if args[:2] == ["session", "delete"]:
+        with (HERE / "deleted.txt").open("a") as f:
+            f.write(args[2] + "\n")
+        return
     if args[:2] == ["debug", "config"]:
         config = Path(os.environ["OPENCODE_CONFIG_DIR"]) / "opencode.json"
         print(config.read_text() if config.exists() else "{}")

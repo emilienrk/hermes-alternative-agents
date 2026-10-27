@@ -42,6 +42,11 @@ def main():
         emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR",
                                             "error": "API error (attempt 1): UNAVAILABLE (code 503)"}})
         return
+    if mode == "blocked" and conv:
+        error = "Your previous response was blocked by content safety filters: x"
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR", "response": "OK\n",
+                                            "error": error}})
+        return
     if mode == "crash":
         print("panic: something broke", flush=True)
         sys.exit(2)

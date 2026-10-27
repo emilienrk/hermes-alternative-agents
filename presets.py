@@ -3,7 +3,8 @@
 <HERMES_HOME>/alternative-agents/presets/<name>.md is the prompt (directory 700, files 600), written
 from Telegram with /preset in reply to a message. A preset's optional settings (agent, banner,
 description) are under `presets` in the plugin settings. The prompt is read in code only, at the
-moment it is sent: it is never shown, logged or recorded (turns.log keeps "(prompt /<name>)").
+moment it is sent: it is never shown, logged or recorded, and the conversation it opens is deleted once over
+(engine.forget_private).
 """
 
 import os

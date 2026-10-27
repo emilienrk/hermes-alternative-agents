@@ -27,6 +27,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from . import presets
 from .config import cfg
 from .state import DATA_DIR
 
@@ -143,7 +144,9 @@ REPLY_RULES = """\
   data, deploying, sending an email, publishing, paying), and before widening the scope of the
   request. Check on disk before saying "done".
 - Files {user} attaches land in {inbox}/; their path is in the message.
-- A message starting with "[Replying to …" quotes the message it answers."""
+- A message starting with "[Replying to …" quotes the message it answers.
+- {presets}/ holds {user}'s saved prompts: they and the conversations they open are private.
+  Never open that directory or look for those conversations."""
 
 CONTEXT_NOTE = """\
 ## Context updates
@@ -210,7 +213,7 @@ class Workspace:
         return "\n\n".join((
             HEADS[self.backend.name].format(user=USER),
             REPLY_RULES.format(user=USER, inbox=_home(self.inbox), outbox=_home(self.outbox),
-                               no_questions=NO_QUESTIONS[self.backend.name])))
+                               presets=_home(presets.DIR), no_questions=NO_QUESTIONS[self.backend.name])))
 
     def tools_section(self):
         notes = [f"- {TOOL_NOTES[t].format(chat_id=CHAT_ID, prefix=self.backend.prefix, agent=self.backend.label)}"

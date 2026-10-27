@@ -322,10 +322,11 @@ async def _cmd_on(agent, _raw_args: str):
     return agent.mode_banner()
 
 
-def _mode_off(agent):
-    """The agent's mode off; a preset's conversation ends with it (x_conv resumes it). Returns the preset."""
+async def _mode_off(agent):
+    """The agent's mode off; a preset's conversation ends with it, deleted. Returns the preset."""
     preset = agent.store.load().get("preset")
     agent.store.update(sticky=None, preset=None, **({"conversation_id": None} if preset else {}))
+    await agent.forget_private()
     return preset
 
 
@@ -333,14 +334,14 @@ async def _modes_off(but=None):
     """One mode at a time: turn off the other agents' modes."""
     for other in engine.AGENTS.values():
         if other is not but and other.store.load().get("sticky"):
-            _mode_off(other)
+            await _mode_off(other)
             await other.set_mode_banner(False)
 
 
 async def _cmd_off(agent, _raw_args: str):
-    preset = _mode_off(agent)
+    preset = await _mode_off(agent)
     await agent.set_mode_banner(False)
-    ended = f" The /{preset} conversation is over ({agent.cmd('conv')} resumes it)." if preset else ""
+    ended = f" The /{preset} conversation is over and deleted." if preset else ""
     return (f"↩️ Back to Hermes.{ended} {agent.label} stays reachable with {agent.cmd()} <message> or by "
             "replying to its messages.")
 
@@ -509,7 +510,7 @@ async def _cmd_back(agent, raw_args: str):
 async def _hand_back(agent, message):
     """The agent's mode off; returns the message Hermes gets: the conversation's recap, then ``message``."""
     state = agent.store.load()
-    _mode_off(agent)
+    await _mode_off(agent)
     await agent.set_mode_banner(False)
     user = workspace.USER
     recap = await asyncio.to_thread(agent.store.recap, state.get("conversation_id"), HANDBACK_TURNS, user,
@@ -610,34 +611,23 @@ async def _cmd_conv(agent, raw_args: str):
         if not arg.isdigit() or not 1 <= int(arg) <= len(convs):
             return f"Invalid number: 1 to {len(convs)}."
         return await pick(None, convs[int(arg) - 1]["id"])
-    choices = [{"value": c["id"], "label": f"{c['last'][5:10]} · {_cut(_conv_title(c), 28)}",
+    choices = [{"value": c["id"], "label": f"{c['last'][5:10]} · {_cut(c['first'], 28)}",
                 "is_current": c["id"] == current} for c in convs]
     if await _picker(agent, f"Resume a {agent.label} conversation:", choices, pick):
         return None
     rows = [f"{'▶' if c['id'] == current else ' '} {i}. {c['last'][:16].replace('T', ' ')} · {c['turns']} turns · "
-            f"{_cut(_conv_title(c), 60)}" for i, c in enumerate(convs, 1)]
+            f"{_cut(c['first'], 60)}" for i, c in enumerate(convs, 1)]
     return f"{agent.label} conversations:\n" + "\n".join(rows) + f"\n\n{agent.cmd('conv')} <number> to resume."
 
 
-def _conv_title(conv):
-    """A conversation as listed: its first message, or the preset that opened it and what followed."""
-    if conv["preset"]:
-        return f"/{conv['preset']} · {conv['topic']}" if conv["topic"] else f"/{conv['preset']}"
-    return conv["first"]
-
-
 async def _pick_conv(agent, _chat_id, value):
-    """Resume a conversation in the agent's mode, under its preset's banner if a preset opened it."""
+    """Resume a conversation in the agent's mode (a preset's one, if on, is over: deleted)."""
     conv = next((c for c in agent.store.conversations(50) if c["id"] == value), None)
-    preset = (conv or {}).get("preset") or None
-    before = agent.store.load()
     await _modes_off(but=agent)
-    bare = bool(preset) and presets.settings(preset)["bare"]
-    agent.store.update(conversation_id=value, sticky=True, preset=preset, **({"bare": value} if bare else {}))
-    if before.get("sticky") and before.get("preset") != preset:
-        await agent.set_mode_banner(False)  # the banner changes with the preset
+    await agent.end_preset()
+    agent.store.update(conversation_id=value, sticky=True)
     await agent.set_mode_banner(True)
-    title = f": {_cut(_conv_title(conv), 60)}" if conv else ""
+    title = f": {_cut(conv['first'], 60)}" if conv else ""
     return (f"{agent.mark} {agent.label} conversation resumed{title}\n".lstrip()
             + f"Your messages go to {agent.label}, {agent.cmd('off')} to go back to Hermes.")
 

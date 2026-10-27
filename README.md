@@ -63,7 +63,7 @@ The `/cc_…` (Claude Code) and `/oc_…` (opencode) commands are the same as ag
 | `/agy [message]` | Status card, or a message for agy |
 | `/agy_on`, `/agy_off` | agy mode on (pinned banner) / back to Hermes |
 | `/agy_new [message]` | New agy conversation |
-| `/agy_conv [n]` | Pick a recent conversation and resume it, in agy mode (under its preset's banner when a preset opened it) |
+| `/agy_conv [n]` | Pick a recent conversation and resume it, in agy mode (never one a preset opened) |
 | `/agy_stop` | Stop the running turn and drop the queue (`/stop` too, in agy mode) |
 | `/agy_retry` | Send your last message again |
 | `/agy_btw <question>` | Side question, answered right away even while agy works, in a separate conversation that knows the main one's last exchanges. Reply to its answer to continue it |
@@ -156,6 +156,12 @@ by default), starts a new conversation and sends the prompt as its first message
 Telegram shows a waiting mark, then the agent's answer, never the prompt. Your next messages go on in
 that conversation, under the preset's pinned banner, until you leave the mode, which ends it.
 
+A preset's conversation is private and leaves no trace once over (`/oc_off`, the banner's button,
+another mode, `/oc_new`, `/oc_conv`): the plugin deletes it from the agent's own storage (opencode
+session, agy's conversation files, Claude Code's transcript), its turns are logged without text,
+`/oc_conv` never lists it, a `/oc_btw` asked meanwhile doesn't see it, and the agents' rules tell them
+the presets directory and those conversations are off limits.
+
 - `/preset` lists them (name, agent, length; never the prompt).
 - `/preset <name>` in reply to a message saves that message as the prompt (new or replaced). A new
   name must not be a command already; it reaches the `/` menu after a gateway restart.
@@ -163,15 +169,14 @@ that conversation, under the preset's pinned banner, until you leave the mode, w
 
 Prompts are files, `<HERMES_HOME>/alternative-agents/presets/<name>.md` (directory 700, files 600).
 The plugin reads one only to send it: through stdin, without the usual context block, and recorded
-nowhere else (the turn log says `(prompt /<name>)`). `/oc_retry` right after sends it again.
+nowhere else. `/oc_retry` right after sends it again.
 
 On opencode, a preset's conversation is bare: DeepSeek gets the prompt, then your messages as you
 wrote them, and nothing else. No opencode system prompt, rules, Hermes context or tools: that
 conversation runs from `<opencode_workspace>/.hermes-bare/`, whose agent has no tools and whose
 plugin empties the system prompt. Leaving the mode (`/oc_off`, the banner's button, another mode)
-ends that conversation: `/oc` then starts an ordinary one, and `/oc_conv` resumes the preset's, bare
-again. A preset with `bare: false` gets opencode's usual
-setup instead. On agy and Claude Code, the prompt opens a conversation with their usual setup.
+ends that conversation: `/oc` then starts an ordinary one. A preset with `bare: false` gets opencode's
+usual setup instead. On agy and Claude Code, the prompt opens a conversation with their usual setup.
 
 Optional settings, per preset:
 

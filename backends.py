@@ -23,6 +23,21 @@ _PARAM_KEYS = ("CommandLine", "AbsolutePath", "TargetFile", "Url", "Query", "Sea
 _OC_PARAM_KEYS = ("command", "filePath", "url", "pattern", "path", "name", "description", "prompt")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CLAUDE_PARAM_KEYS = ("command", "file_path", "url", "query", "pattern", "path", "skill", "description", "prompt")
+_UUID = re.compile(r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+
+
+def _remove(paths):
+    """Delete these files and directories; False if one stays."""
+    for path in paths:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("alternative-agents: cannot delete %s", path, exc_info=True)
+            return False
+    return True
 
 
 class Backend:
@@ -63,6 +78,10 @@ class Backend:
     def finished(self, run):
         """Called after the turn, before its answer is sent."""
 
+    def forget(self, conversation_id):
+        """Delete the agent's own record of a conversation; False to try again later."""
+        return True
+
     def unavailable(self):
         """Why no turn can start (e.g. a missing key), or ""; checked before each run."""
         return ""
@@ -91,14 +110,19 @@ class Agy(Backend):
     default_mark = "🛸"
     restart_notice = "Conversation saturated (503)"
     MODELS_TTL_S = 3600
-    TOKEN_FILE = Path.home() / ".gemini/antigravity-cli/antigravity-oauth-token"
-    SETTINGS = Path.home() / ".gemini/antigravity-cli/settings.json"
+    STORE = Path.home() / ".gemini/antigravity-cli"
+    TOKEN_FILE = STORE / "antigravity-oauth-token"
+    SETTINGS = STORE / "settings.json"
     # agy encodes the reasoning effort in the model id (gemini-3.8-flash-high); its --effort flag
     # conflicts with those ids, so the effort switches to a sibling variant instead.
     _EFFORT_SUFFIX = re.compile(r"-(low|medium|high|xhigh|max)$")
     # A long conversation ends in a permanent 503 on every model, while a fresh one answers
     # (measured 2026-10-01).
     _SATURATED = re.compile(r"UNAVAILABLE|code 503")
+    # Once Google's output filter has blocked one answer of a conversation (agy then retries), agy
+    # reports every later turn of it as failed with that error, the answer included (measured
+    # 2026-10-27: a conversation stuck that way answered "OK" with status ERROR).
+    _BLOCKED = re.compile(r"blocked by content safety filters")
     # Two agy processes sharing the OAuth token (e.g. another account on the machine): a
     # simultaneous refresh fails one of them once.
     _TRANSIENT = re.compile(r"not logged into Antigravity|INTERNAL \(code 500\)", re.I)
@@ -143,8 +167,11 @@ class Agy(Backend):
         elif kind == "step_update":
             self._track_step(run, event.get("step_update") or {})
         elif kind == "result":
-            run.result = event.get("result") or {}
+            run.result = dict(event.get("result") or {})
             run.tokens = int(((run.result.get("usage") or {}).get("total_tokens")) or 0)
+            if (run.result.get("status") == "ERROR" and (run.result.get("response") or "").strip()
+                    and self._BLOCKED.search(str(run.result.get("error") or ""))):
+                run.result["status"] = "SUCCESS"  # the answer came out: the block was retried
 
     def _track_step(self, run, step):
         kind, status = step.get("step_type"), step.get("state")
@@ -168,6 +195,10 @@ class Agy(Backend):
 
     def transient(self, error):
         return bool(self._TRANSIENT.search(error))
+
+    def forget(self, conversation_id):
+        # conversations/<id>.db, brain/<id>/, annotations/<id>.pbtxt, presence/<id>.lock
+        return not _UUID.match(conversation_id) or _remove(self.STORE.glob(f"*/{conversation_id}*"))
 
     def hint(self, error):
         if self._QUOTA.search(error):
@@ -261,6 +292,7 @@ class Claude(Backend):
     can_fork = True
     restart_notice = "Conversation lost or too long"
     MODELS = (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable"))
+    STORE = Path.home() / ".claude"
     # Interactive or session-bound tools: nobody answers mid-turn, and the process ends with the turn.
     DISALLOWED = ("AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronDelete", "CronList",
                   "ScheduleWakeup", "RemoteTrigger", "PushNotification")
@@ -298,6 +330,11 @@ class Claude(Backend):
         if conv:
             cmd += ["--resume", conv] + (["--fork-session"] if fork else [])
         return cmd, prompt
+
+    def forget(self, conversation_id):
+        # projects/<workspace>/<id>.jsonl and <id>/, session-env/<id>/, file-history/<id>/, todos/<id>-…
+        return not _UUID.match(conversation_id) or _remove(
+            [*self.STORE.glob(f"*/{conversation_id}*"), *self.STORE.glob(f"projects/*/{conversation_id}*")])
 
     def env(self, base, run=None):
         # The subscription pays, never an API key; Hermes' memory is the shared one.
@@ -439,6 +476,7 @@ class OpenCode(Backend):
                  "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1", "OPENCODE_DISABLE_AUTOUPDATE": "1",
                  "OPENCODE_DISABLE_SHARE": "1"}
     _RESTART = re.compile(r"Session not found", re.I)
+    _SESSION = re.compile(r"^ses_[A-Za-z0-9]+$")
     _TRANSIENT = re.compile(r"\b50[0-4]\b|overloaded|ECONNRESET|socket hang up|fetch failed|timed? ?out", re.I)
     _BALANCE = re.compile(r"Insufficient Balance|\b402\b", re.I)
     _AUTH = re.compile(r"\b401\b|Authentication|invalid api key|API key", re.I)
@@ -504,6 +542,22 @@ class OpenCode(Backend):
             # A title of its own: opencode would otherwise ask the model for one, from the message.
             cmd += ["--title", f"Telegram {datetime.now():%Y-%m-%d %H:%M}"]
         return cmd, prompt  # through stdin: no argv size limit, nothing in `ps`
+
+    def forget(self, conversation_id):
+        if not self._SESSION.match(conversation_id):
+            return True
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("DEEPSEEK_", "OPENCODE_"))}
+        try:
+            proc = subprocess.run([self.bin, "session", "delete", conversation_id], capture_output=True, text=True,
+                                  timeout=60, env={**env, **self.ISOLATION}, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            logger.warning("alternative-agents: opencode session %s not deleted", conversation_id, exc_info=True)
+            return False
+        output = _ANSI.sub("", proc.stdout + proc.stderr).strip()
+        if proc.returncode and not self._RESTART.search(output):
+            logger.warning("alternative-agents: opencode session %s not deleted: %s", conversation_id, output[-300:])
+            return False
+        return True
 
     def env(self, base, run=None):
         env = {k: v for k, v in base.items() if not k.startswith(("DEEPSEEK_", "OPENCODE_"))}

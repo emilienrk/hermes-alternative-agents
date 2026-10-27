@@ -123,20 +123,20 @@ class Store:
         return turns
 
     def conversations(self, limit=8):
-        """Recent conversations, newest first: id, first message, last activity, turn count, the preset
-        that opened it ("" if none) and its topic (first message that isn't the preset's prompt)."""
-        convs = {}
+        """Recent conversations, newest first: id, first message, last activity, turn count. Those a
+        preset opened are not listed: older logs recorded them, they are deleted once over."""
+        convs, opened_by_preset = {}, set()
         for order, turn in enumerate(self.recent_turns()):
             cid = turn.get("conversation_id")
             if not cid or turn.get("btw"):
                 continue
-            conv = convs.setdefault(cid, {"id": cid, "first": turn.get("message") or "", "turns": 0,
-                                          "preset": turn.get("preset") or "", "topic": ""})
-            if not conv["topic"] and not turn.get("preset"):
-                conv["topic"] = turn.get("message") or ""
+            if turn.get("preset"):
+                opened_by_preset.add(cid)
+            conv = convs.setdefault(cid, {"id": cid, "first": turn.get("message") or "", "turns": 0})
             conv.update(last=turn.get("at") or "", order=order)
             conv["turns"] += 1
-        return sorted(convs.values(), key=lambda c: c["order"], reverse=True)[:limit]
+        listed = [c for c in convs.values() if c["id"] not in opened_by_preset]
+        return sorted(listed, key=lambda c: c["order"], reverse=True)[:limit]
 
     def recap(self, conversation_id, max_turns, user="User", agent="agy", max_chars=600):
         """The last exchanges of a conversation, to seed a fresh one."""

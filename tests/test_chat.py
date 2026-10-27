@@ -138,8 +138,9 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.saved = {(module, name): getattr(module, name) for module, name in (
             (engine, "TYPING_EVERY_S"), (engine, "STATUS_EVERY_S"), (engine, "_transcribe"),
             (workspace, "HERMES_HOME"), (presets, "DIR"), (state, "DATA_DIR"), (workspace, "DATA_DIR"),
-            (tasks, "_registry_path"))}
+            (tasks, "_registry_path"), (backends.Agy, "STORE"), (backends.Claude, "STORE"))}
         presets.DIR = self.tmp / "presets"
+        backends.Agy.STORE, backends.Claude.STORE = self.tmp / "agy-store", self.tmp / "claude-store"
         state.DATA_DIR = workspace.DATA_DIR = self.tmp
         tasks._registry_path = lambda: self.tmp / "tasks.json"
         plugin.configure(lambda key, default=None: SETTINGS.get(key, default))
@@ -159,7 +160,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.oc.backend.env_file.write_text("# dedicated key\nDEEPSEEK_API_KEY='sk-test'\n")
         engine.TYPING_EVERY_S, engine.STATUS_EVERY_S = 0.2, 0.3
         engine._transcribe = lambda path: "transcription du vocal"
-        for f in ("calls.jsonl", "mode.txt", "media.txt"):
+        for f in ("calls.jsonl", "mode.txt", "media.txt", "deleted.txt"):
             (TESTS_DIR / f).unlink(missing_ok=True)
         self.adapter = FakeAdapter()
         engine._rt.update(adapter=self.adapter, gateway=None, loop=asyncio.get_running_loop(), notice_sent=False)
@@ -173,12 +174,17 @@ class Base(unittest.IsolatedAsyncioTestCase):
             setattr(module, name, value)
         config.cfg.clear()
         config.cfg.update(self.cfg_saved)
-        for f in ("calls.jsonl", "mode.txt", "media.txt"):
+        for f in ("calls.jsonl", "mode.txt", "media.txt", "deleted.txt"):
             (TESTS_DIR / f).unlink(missing_ok=True)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def mode(self, mode):
         (TESTS_DIR / "mode.txt").write_text(mode)
+
+    def deleted(self):
+        """The opencode sessions deleted, in order."""
+        path = TESTS_DIR / "deleted.txt"
+        return path.read_text().split() if path.exists() else []
 
     def calls(self):
         path = TESTS_DIR / "calls.jsonl"
@@ -370,6 +376,15 @@ class TurnTests(Base):
         self.assertIn("♻️", reply)
         self.assertIn("ECHO:", reply)
         self.assertNotEqual(store.load()["conversation_id"], "old-conv")
+
+    async def test_answer_despite_a_stale_content_filter_error(self):
+        self.agy.store.update(conversation_id="old-conv")
+        self.mode("blocked")
+        await self.dispatch(event("/agy continue", msg_id="1"))
+        await self.finish()
+        self.assertEqual([c["conversation"] for c in self.calls()], ["old-conv"])  # not run twice
+        self.assertTrue(self.adapter.sent()[-1][1].startswith("OK"))
+        self.assertEqual(self.agy.store.load()["conversation_id"], "old-conv")
 
     async def test_crash_reports_error_and_retry_works(self):
         self.mode("crash")
@@ -886,7 +901,8 @@ class PresetTests(Base):
         self.assertIn(("send", "🐭 …", "10"), self.adapter.calls)
         self.assertIn("See main.py.\n\nOK", self.adapter.sent()[-1][1])
         log = json.loads(self.oc.store.turns_log.read_text().splitlines()[-1])
-        self.assertEqual((log["message"], log["preset"]), ("(prompt /mouse)", "mouse"))
+        self.assertEqual(log["preset"], "mouse")
+        self.assertFalse({"message", "response", "conversation_id", "actions"} & log.keys())
         self.assertIn("/mouse preset", await plugin._cmd_status(self.oc, ""))
 
         await self.dispatch(event("what next?", msg_id="11"))  # the mode goes on in that conversation
@@ -894,11 +910,13 @@ class PresetTests(Base):
         second = self.calls()[1]
         self.assertEqual(second["conversation"], state["conversation_id"])
         self.assertTrue(second["prompt"].endswith("what next?"))
-        self.assertEqual(self.oc.store.conversations()[0]["first"], "(prompt /mouse)")
+        self.assertEqual(self.oc.store.conversations(), [])  # never listed: nothing to resume
         self.assertNoSecret()
+        self.assertEqual(self.deleted(), [])  # kept while it goes on
 
         pin = self.oc.store.load()["mode_pin"]
         self.assertIn("Next message", await plugin._cmd_new(self.oc, ""))
+        self.assertEqual(self.deleted(), [state["conversation_id"]])
         self.assertNotIn("preset", self.oc.store.load())
         self.assertTrue(self.oc.store.load()["sticky"])
         self.assertIn(("unpin", pin), self.adapter.calls)
@@ -921,8 +939,13 @@ class PresetTests(Base):
         self.assertEqual((self.calls()[1]["prompt"], self.calls()[1]["conversation"]), ("what next?", conv))
         self.assertEqual(self.calls()[1]["env"]["OPENCODE_CONFIG_DIR"], str(bare_dir))  # no context block
 
-        self.assertIn("The /mouse conversation is over", await plugin._cmd_off(self.oc, ""))
-        self.assertNotIn("conversation_id", self.oc.store.load())
+        self.assertIn("The /mouse conversation is over and deleted", await plugin._cmd_off(self.oc, ""))
+        self.assertEqual(self.deleted(), [conv])
+        state = self.oc.store.load()
+        self.assertFalse({"conversation_id", "bare", "private", "last_turn"} & state.keys())
+        for record in (self.oc.store.turns_log, self.oc.store.state_file):
+            self.assertNotIn("what next?", record.read_text())  # what was said there is gone too
+        self.assertEqual(await plugin._cmd_retry(self.oc, ""), "Nothing to send again.")
         await self.dispatch(event("/oc hello", msg_id="13"))
         await self.finish()
         normal = self.calls()[-1]
@@ -930,12 +953,38 @@ class PresetTests(Base):
         self.assertNotIn("--agent", normal["args"])
         self.assertIsNone(normal["conversation"])
         self.assertTrue(normal["prompt"].endswith("hello") and normal["prompt"] != "hello")
-
-        await plugin._pick_conv(self.oc, CHAT, conv)  # resumed: bare again
-        await self.dispatch(event("back", msg_id="14"))
-        await self.finish()
-        self.assertEqual((self.calls()[-1]["prompt"], self.calls()[-1]["conversation"]), ("back", conv))
+        self.assertEqual([c["id"] for c in self.oc.store.conversations()], [self.oc.store.load()["conversation_id"]])
         self.assertNoSecret()
+
+    async def test_preset_left_during_its_turn(self):
+        presets.save("mouse", self.SECRET)
+        self.mode("verbose")
+        await self.dispatch(event("/mouse", msg_id="10"))
+        await asyncio.sleep(1)
+        conv = self.oc.store.load()["conversation_id"]
+        await plugin._cmd_off(self.oc, "")
+        self.assertEqual(self.deleted(), [])  # the turn still writes to it
+        await self.finish(30)
+        self.assertEqual(self.deleted(), [conv])
+        self.assertFalse({"conversation_id", "private"} & self.oc.store.load().keys())
+
+    async def test_agy_and_claude_conversations_deleted(self):
+        layouts = {
+            "agy": ("conversations/{}.db", "brain/{}/a.md", "annotations/{}.pbtxt", "conversations/other.db"),
+            "claude": ("projects/x/{}.jsonl", "projects/x/{}/a.json", "session-env/{}/b", "projects/x/other.jsonl")}
+        for agent in (self.agy, self.claude):
+            config.cfg["presets"] = {"mouse": {"backend": agent.backend.name}}
+            presets.save("mouse", self.SECRET)
+            await self.dispatch(event("/mouse", msg_id="10"))
+            await self.finish(agent=agent)
+            conv = agent.store.load()["conversation_id"]
+            files = [agent.backend.STORE / path.format(conv) for path in layouts[agent.backend.name]]
+            for f in files:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text("x")
+            await plugin._cmd_off(agent, "")
+            self.assertEqual([f for f in files if f.exists()], files[-1:])  # another conversation's file stays
+            self.assertEqual([d for d in (files[1].parent, files[2].parent) if d.name == conv and d.exists()], [])
 
     async def test_preset_with_its_agent_setup(self):
         config.cfg["presets"] = {"mouse": {"bare": False}}
@@ -1173,34 +1222,29 @@ class CommandTests(Base):
         self.assertIn("first topic", await plugin._cmd_conv(self.agy, "2"))
         self.assertEqual(store.load()["conversation_id"], "c1")
 
-    async def test_resume_turns_the_mode_on_with_the_preset_banner(self):
+    async def test_resume_never_offers_a_preset_conversation(self):
         config.cfg["presets"] = {"mouse": {"backend": "oc", "banner": "🐭 Mouse mode"}}
         store = self.oc.store
         store.log_turn({"conversation_id": "plain", "message": "a topic"})
-        store.log_turn({"conversation_id": "rat", "message": "(prompt /mouse)", "preset": "mouse"})
-        store.log_turn({"conversation_id": "rat", "message": "what next?"})
+        store.log_turn({"conversation_id": "ses_old", "message": "(prompt /mouse)", "preset": "mouse"})  # older log
+        store.log_turn({"conversation_id": "ses_old", "message": "what next?"})
         self.agy.store.update(sticky=True)
         await plugin._cmd_on(self.agy, "")
-        agy_pin = self.agy.store.load()["mode_pin"]
+        store.update(preset="mouse", conversation_id="ses_rat", private=["ses_rat"])
+        await plugin._cmd_on(self.oc, "")
+        rat_pin = store.load()["mode_pin"]
+        self.assertEqual(self.adapter.sent("bot_send")[-1][1], "🐭 Mouse mode")
 
         self.assertIsNone(await plugin._cmd_conv(self.oc, ""))
-        self.assertTrue(self.adapter.sent("picker")[-1][2][0]["label"].endswith("/mouse · what next?"))
-        reply = await plugin._cmd_conv(self.oc, "1")
-        self.assertIn("/mouse · what next?", reply)
+        self.assertEqual([c["value"] for c in self.adapter.sent("picker")[-1][2]], ["plain"])
+        self.assertIn("a topic", await plugin._cmd_conv(self.oc, "1"))
         state = store.load()
-        self.assertEqual((state["conversation_id"], state["sticky"], state["preset"]), ("rat", True, "mouse"))
+        self.assertEqual((state["conversation_id"], state["sticky"]), ("plain", True))
+        self.assertFalse({"preset", "private"} & state.keys())
+        self.assertEqual(self.deleted(), ["ses_rat"])
         self.assertNotIn("sticky", self.agy.store.load())  # one mode at a time
-        self.assertIn(("unpin", agy_pin), self.adapter.calls)
-        self.assertEqual(self.adapter.sent("bot_send")[-1][1], "🐭 Mouse mode")
-        rat_pin = state["mode_pin"]
-
-        await plugin._cmd_conv(self.oc, "1")  # the same again: the banner stays
-        self.assertEqual(store.load()["mode_pin"], rat_pin)
-
-        self.assertIn("a topic", await plugin._cmd_conv(self.oc, "2"))
-        state = store.load()
-        self.assertEqual((state["conversation_id"], state["sticky"], state.get("preset")), ("plain", True, None))
         self.assertIn(("unpin", rat_pin), self.adapter.calls)
+        self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐋 opencode mode on"))
         self.assertTrue(self.adapter.sent("bot_send")[-1][1].startswith("🐋 opencode mode on"))
 
         await self.dispatch(event("next one", msg_id="20"))  # goes to opencode, in that conversation
