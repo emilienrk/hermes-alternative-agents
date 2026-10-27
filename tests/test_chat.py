@@ -138,9 +138,10 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.saved = {(module, name): getattr(module, name) for module, name in (
             (engine, "TYPING_EVERY_S"), (engine, "STATUS_EVERY_S"), (engine, "_transcribe"),
             (workspace, "HERMES_HOME"), (presets, "DIR"), (state, "DATA_DIR"), (workspace, "DATA_DIR"),
-            (tasks, "_registry_path"), (backends.Agy, "STORE"), (backends.Claude, "STORE"))}
+            (tasks, "_registry_path"), (backends.Agy, "STORE"), (backends.Claude, "STORE"), (backends.OpenCode, "DB"))}
         presets.DIR = self.tmp / "presets"
         backends.Agy.STORE, backends.Claude.STORE = self.tmp / "agy-store", self.tmp / "claude-store"
+        backends.OpenCode.DB = self.tmp / "opencode.db"
         state.DATA_DIR = workspace.DATA_DIR = self.tmp
         tasks._registry_path = lambda: self.tmp / "tasks.json"
         plugin.configure(lambda key, default=None: SETTINGS.get(key, default))
@@ -967,6 +968,22 @@ class PresetTests(Base):
         await self.finish(30)
         self.assertEqual(self.deleted(), [conv])
         self.assertFalse({"conversation_id", "private"} & self.oc.store.load().keys())
+
+    def test_opencode_database_compacted(self):
+        import sqlite3
+        db = sqlite3.connect(backends.OpenCode.DB)
+        db.execute("PRAGMA secure_delete=OFF")  # as opencode's SQLite: a deleted row's bytes stay
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE part (session_id TEXT, data TEXT)")
+        db.execute("INSERT INTO part VALUES ('ses_x', ?)", (self.SECRET * 200,))
+        db.commit()
+        db.execute("DELETE FROM part")  # as `opencode session delete` does
+        db.commit()
+        db.close()
+        self.assertTrue(self.oc.backend.forget("ses_x"))
+        self.assertEqual(self.deleted(), ["ses_x"])
+        for path in self.tmp.glob("opencode.db*"):
+            self.assertNotIn(b"SECRET-PROMPT", path.read_bytes())
 
     async def test_agy_and_claude_conversations_deleted(self):
         layouts = {

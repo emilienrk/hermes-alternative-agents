@@ -6,8 +6,10 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -477,6 +479,7 @@ class OpenCode(Backend):
                  "OPENCODE_DISABLE_SHARE": "1"}
     _RESTART = re.compile(r"Session not found", re.I)
     _SESSION = re.compile(r"^ses_[A-Za-z0-9]+$")
+    DB = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "opencode" / "opencode.db"
     _TRANSIENT = re.compile(r"\b50[0-4]\b|overloaded|ECONNRESET|socket hang up|fetch failed|timed? ?out", re.I)
     _BALANCE = re.compile(r"Insufficient Balance|\b402\b", re.I)
     _AUTH = re.compile(r"\b401\b|Authentication|invalid api key|API key", re.I)
@@ -557,7 +560,20 @@ class OpenCode(Backend):
         if proc.returncode and not self._RESTART.search(output):
             logger.warning("alternative-agents: opencode session %s not deleted: %s", conversation_id, output[-300:])
             return False
+        self._compact()
         return True
+
+    def _compact(self):
+        # A deleted session's text stays in the database's free pages until it is rebuilt (measured
+        # 2026-10-27); opencode busy, it waits for the next deletion.
+        if not self.DB.is_file():
+            return
+        try:
+            with closing(sqlite3.connect(f"file:{self.DB}?mode=rw", uri=True, timeout=10)) as db:
+                db.execute("VACUUM")
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            logger.warning("alternative-agents: opencode's database not compacted", exc_info=True)
 
     def env(self, base, run=None):
         env = {k: v for k, v in base.items() if not k.startswith(("DEEPSEEK_", "OPENCODE_"))}
