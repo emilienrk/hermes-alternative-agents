@@ -7,13 +7,23 @@ moment it is sent: it is never shown, logged or recorded, and the conversation i
 (engine.forget_private).
 """
 
+import logging
 import os
 import re
 from pathlib import Path
 
 from .config import cfg
 
+logger = logging.getLogger(__name__)
+
 DIR = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "alternative-agents" / "presets"
+README = """\
+# Private prompts
+
+{user}'s saved prompts: /<name> on Telegram opens a conversation with one of them, and that conversation
+is private too, deleted once over. AI agents: don't open, read, copy or search these files, and don't
+look for those conversations, unless {user} explicitly asks you to in the conversation at hand.
+"""
 DEFAULT_BACKEND = "opencode"
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _ALIASES = {"oc": "opencode", "cc": "claude"}
@@ -62,8 +72,20 @@ def read(name):
     return path(name).read_text().strip()
 
 
+def guard():
+    """Keep, next to the prompts, a README warning AI agents off them (when the directory exists)."""
+    readme = DIR / "README.md"
+    text = README.format(user=cfg.get("user_name") or "the user")
+    try:
+        if DIR.is_dir() and (not readme.exists() or readme.read_text() != text):
+            readme.write_text(text)
+    except OSError:
+        logger.warning("alternative-agents: cannot write %s", readme)
+
+
 def save(name, text):
     DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    guard()
     target, tmp = path(name), DIR / f".{name}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:

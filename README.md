@@ -159,8 +159,10 @@ that conversation, under the preset's pinned banner, until you leave the mode, w
 A preset's conversation is private and leaves no trace once over (`/oc_off`, the banner's button,
 another mode, `/oc_new`, `/oc_conv`): the plugin deletes it from the agent's own storage (opencode
 session, agy's conversation files, Claude Code's transcript), its turns are logged without text,
-`/oc_conv` never lists it, a `/oc_btw` asked meanwhile doesn't see it, and the agents' rules tell them
-the presets directory and those conversations are off limits.
+`/oc_conv` never lists it, a `/oc_btw` or `/cc_handoff` doesn't see it, and the agents' rules tell them
+the presets directory and those conversations are off limits. The directory also holds a README saying
+so, for any other AI that lands there. Rules, not a lock: an agent runs as your user and can read what
+you can.
 
 - `/preset` lists them (name, agent, length; never the prompt).
 - `/preset <name>` in reply to a message saves that message as the prompt (new or replaced). A new

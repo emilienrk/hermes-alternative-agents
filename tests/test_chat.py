@@ -922,6 +922,8 @@ class PresetTests(Base):
         self.assertEqual(oct(presets.DIR.stat().st_mode & 0o777), "0o700")
         self.assertEqual(oct(presets.path("mouse").stat().st_mode & 0o777), "0o600")
         self.assertEqual(presets.read("mouse"), self.SECRET)
+        self.assertIn("don't open, read", (presets.DIR / "README.md").read_text())
+        self.assertEqual(presets.names(), ["mouse"])
         self.assertIn(f"/mouse · opencode · {len(self.SECRET)} chars", await self.preset_cmd("/preset"))
         self.assertNotIn("New preset", await self.preset_cmd("/preset mouse", reply_text=self.SECRET + "!"))
         for taken in ("oc_new", "new", "agy", "preset", "Bad-Name"):

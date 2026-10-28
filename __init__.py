@@ -109,6 +109,7 @@ def configure(get):
         logger.warning("alternative-agents: no chat_id setting, nothing will be routed "
                        "(hermes config set plugins.entries.alternative-agents.settings.chat_id <telegram chat id>)")
     workspace.configure()
+    presets.guard()
     engine.configure(backends.make(cfg["backends"]))
 
 
