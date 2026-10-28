@@ -72,7 +72,7 @@ The `/cc_…` (Claude Code) and `/oc_…` (opencode) commands are the same as ag
 | `/agy_verbose [on\|off]` | Live status of the agent's actions, or just its answer |
 | `/agy_voice [direct\|local]` | Voice notes as audio for agy, or transcribed locally |
 | `/agy_voice reply [off\|mirror\|always]` | The answer as a voice note too (mirror: when you sent one) |
-| `/agy_handoff [message]` | Hand the Hermes conversation over to agy (agy mode on, seeded with the thread) |
+| `/agy_handoff [hermes\|cc\|oc] [message]` | agy takes over, in a new conversation seeded with the Hermes thread or the other agent's last exchanges (buttons when another agent has a conversation; a preset's is never offered), then agy mode on |
 | `/agy_back [message]` | Back to Hermes, which gets a recap of the agy conversation |
 | `/agy_task` | Scheduled tasks: list; `add <when> \| <prompt>`, `rm <n>`, `run <n>` |
 | `/agy_usage` | Quota left (Antigravity's weekly and 5-hour limits; Claude's as the last turn reported them; the DeepSeek balance), then turns, tokens and time through the plugin |

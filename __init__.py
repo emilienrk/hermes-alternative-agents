@@ -53,7 +53,7 @@ COMMANDS = (  # (suffix, description, args hint); {label} is the agent's
     ("conv", "Resume a {label} conversation", "[number]"),
     ("retry", "Send my last message to {label} again", ""),
     ("btw", "Side question, answered now, next to the main conversation", "<question>"),
-    ("handoff", "Hand the Hermes conversation over to {label}", "[message]"),
+    ("handoff", "{label} takes over Hermes' or another agent's conversation", "[hermes|agent] [message]"),
     ("back", "Hand the {label} conversation back to Hermes", "[message]"),
     ("task", "Tasks {label} runs on a schedule", "[add <when> | <prompt> · rm n · run n]"),
     ("usage", "{product} quota left, and {label} turns and tokens", ""),
@@ -247,7 +247,7 @@ async def _act(decision, event):
     """Run a routing decision; a dict is the hook's answer instead of the default skip."""
     kind, agent, payload = decision
     if kind == "handoff":
-        await _handoff(agent, payload, event.message_id)
+        await engine.say(await _handoff(agent, payload, event.message_id), event.message_id)
     elif kind == "back":
         return {"action": "rewrite", "text": await _hand_back(agent, payload)}
     elif kind == "btw":
@@ -482,23 +482,77 @@ def _voice_reply(agent, args):
 # ── handoff ──
 
 async def _cmd_handoff(agent, raw_args: str):
-    await _handoff(agent, raw_args.strip())  # normally taken by the dispatch hook; this is the fallback
-    return None
+    # Normally taken by the dispatch hook; this is the fallback.
+    return await _handoff(agent, raw_args.strip())
 
 
 async def _handoff(agent, message, reply_to=None):
-    """New conversation seeded with the Hermes thread, and the agent's mode on."""
-    thread = await asyncio.to_thread(workspace.hermes_thread, HANDOFF_THREAD_MESSAGES)
+    """``agent`` takes over the Hermes thread or another agent's conversation: the source named first in
+    ``message``, else picked when another agent has one to hand over. Returns a notice, if any."""
+    word, rest = (message.split(None, 1) + ["", ""])[:2]
+    named = _named_source(agent, word)
+    if named:
+        return await _take_over(agent, named, rest.strip(), reply_to)
+    sources = [other for other in engine.AGENTS.values()
+               if other is not agent and await asyncio.to_thread(_conversation_recap, other)]
+    choices = [{"value": "hermes", "label": "Hermes", "is_current": False}] + [
+        {"value": other.backend.name, "label": other.label, "is_current": False} for other in sources]
+    if sources and await _picker(agent, f"{agent.label} takes over the conversation of:", choices,
+                                 partial(_pick_source, agent, message, reply_to)):
+        return None
+    return await _take_over(agent, "hermes", message, reply_to)
+
+
+def _named_source(agent, word):
+    """The source ``word`` names: "hermes", another agent's backend name (agy, cc, oc… work too), or None."""
+    word = word.lower().rstrip(",:")
+    if word in ("hermes", "hermès"):
+        return "hermes"
+    return next((name for name, other in engine.AGENTS.items() if other is not agent
+                 and word in (name, other.backend.prefix, other.label.lower())), None)
+
+
+def _conversation_recap(agent):
+    """The last exchanges of the agent's conversation; "" when there's none to hand over (a preset's
+    stays private)."""
+    state = agent.store.load()
+    conv = state.get("conversation_id")
+    if not conv or state.get("preset") or conv in (state.get("private") or ()):
+        return ""
+    return agent.store.recap(conv, HANDBACK_TURNS, workspace.USER, agent.label, 1200)
+
+
+async def _pick_source(agent, message, reply_to, _chat_id, value):
+    source = "Hermes" if value == "hermes" else engine.AGENTS[value].label
+    return (await _take_over(agent, value, message, reply_to)
+            or f"{agent.mark} {agent.label} takes over from {source}.".strip())
+
+
+async def _take_over(agent, source, message, reply_to):
+    """New conversation seeded with the source's exchanges, and the agent's mode on; returns why not, if not."""
     user = workspace.USER
-    text = (f"Hermes hands this conversation with {user} over to you. Recent thread between {user} and "
-            f"Hermes:\n{thread or '(empty)'}\n\n"
-            + (message or f"Pick up where Hermes left off: in a few lines, say where things stand and what "
+    if source == "hermes":
+        thread = await asyncio.to_thread(workspace.hermes_thread, HANDOFF_THREAD_MESSAGES)
+        name = "Hermes"
+        head = f"Hermes hands this conversation with {user} over to you. Recent thread between {user} and Hermes"
+        seed = thread or "(empty)"
+    else:
+        other = engine.AGENTS[source]
+        seed = await asyncio.to_thread(_conversation_recap, other)
+        if not seed:
+            return f"{other.label} has no conversation to hand over."
+        name = other.label
+        head = (f"{name} ({other.backend.product}) hands its conversation with {user} over to you. "
+                "Their last exchanges")
+    text = (f"{head}:\n{seed}\n\n"
+            + (message or f"Pick up where {name} left off: in a few lines, say where things stand and what "
                           f"you will do next, then wait for {user}."))
     await _modes_off(but=agent)
     await agent.end_preset()
     agent.store.update(sticky=True)
     await agent.set_mode_banner(True)
     await agent.submit(engine.Job(text=text, message_id=reply_to, new_conversation=True))
+    return None
 
 
 async def _cmd_back(agent, raw_args: str):
@@ -509,12 +563,10 @@ async def _cmd_back(agent, raw_args: str):
 
 async def _hand_back(agent, message):
     """The agent's mode off; returns the message Hermes gets: the conversation's recap, then ``message``."""
-    state = agent.store.load()
+    recap = await asyncio.to_thread(_conversation_recap, agent)
     await _mode_off(agent)
     await agent.set_mode_banner(False)
     user = workspace.USER
-    recap = await asyncio.to_thread(agent.store.recap, state.get("conversation_id"), HANDBACK_TURNS, user,
-                                    agent.label, 1200)
     head = (f"[Handover from {agent.label} ({agent.backend.product}): {user} worked with {agent.label} and comes "
             f"back to you. Their last exchanges:\n{recap or '(none)'}]\n\n")
     return head + (message or "Take over from here: in a few lines, say where things stand and what's next.")

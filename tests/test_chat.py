@@ -653,6 +653,53 @@ class ClaudeTests(Base):
         self.assertIn("ECHO:", result["text"])
         self.assertNotIn("sticky", self.claude.store.load())
 
+    async def test_handoff_from_another_agent(self):
+        agy = self.agy.store
+        agy.update(conversation_id="a1", sticky=True)
+        agy.log_turn({"conversation_id": "a1", "message": "fix the build", "response": "build fixed"})
+        await self.dispatch(event("/cc_handoff agy, and now?", msg_id="5"))
+        await self.finish()
+        call = self.calls()[0]
+        self.assertIsNone(call["conversation"])
+        self.assertIn("build fixed", call["prompt"])
+        self.assertTrue(call["prompt"].rstrip().endswith("and now?"))
+        self.assertTrue(self.claude.store.load()["sticky"])
+        self.assertNotIn("sticky", agy.load())
+        self.assertEqual(agy.load()["conversation_id"], "a1")
+
+    async def test_handoff_picker(self):
+        self.agy.store.update(conversation_id="a1")
+        self.agy.store.log_turn({"conversation_id": "a1", "message": "fix the build", "response": "build fixed"})
+        result = await self.dispatch(event("/cc_handoff", msg_id="5"))
+        self.assertEqual(result["action"], "skip")
+        choices = self.adapter.sent("picker")[0][2]
+        self.assertEqual([c["value"] for c in choices], ["hermes", "agy"])  # opencode has no conversation
+        self.assertIn("Claude takes over from agy.", await self.adapter.on_choice(CHAT, "agy"))
+        await self.finish()
+        self.assertIn("build fixed", self.calls()[0]["prompt"])
+
+    async def test_handoff_never_takes_a_preset_conversation(self):
+        agy = self.agy.store
+        agy.update(conversation_id="a1")
+        agy.log_turn({"conversation_id": "a1", "message": "fix the build", "response": "build fixed"})
+        await self.dispatch(event("/cc_handoff", msg_id="5"))
+        agy.update(conversation_id="p1", preset="secret", sticky=True)  # opened meanwhile
+        agy.log_turn({"conversation_id": "p1", "message": "private", "response": "s3cr3t answer"})  # an older log
+        self.assertEqual(await self.adapter.on_choice(CHAT, "agy"), "agy has no conversation to hand over.")
+        await self.dispatch(event("/cc_handoff agy", msg_id="6"))
+        self.assertEqual(self.adapter.sent()[-1][1], "agy has no conversation to hand over.")
+        self.assertIsNone(self.claude.worker)
+        self.assertTrue(agy.load()["sticky"])
+        saved, workspace.hermes_thread = workspace.hermes_thread, lambda limit: "- Alex: plan the trip"
+        try:
+            await self.dispatch(event("/cc_handoff", msg_id="7"))  # Hermes: no other conversation to offer
+            await self.finish()
+        finally:
+            workspace.hermes_thread = saved
+        self.assertEqual(len(self.adapter.sent("picker")), 1)
+        self.assertNotIn("s3cr3t", self.calls()[0]["prompt"])
+        self.assertIn("plan the trip", self.calls()[0]["prompt"])
+
     async def test_doctor(self):
         self.claude.backend.workspace.mcp_config.parent.mkdir(parents=True, exist_ok=True)
         self.claude.backend.workspace.mcp_config.write_text(json.dumps({"mcpServers": {}}))
