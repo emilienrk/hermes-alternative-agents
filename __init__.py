@@ -29,7 +29,7 @@ from functools import partial
 from itertools import zip_longest
 from pathlib import Path
 
-from . import backends, config, engine, presets, workspace
+from . import backends, config, engine, presets, runner, workspace
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,7 @@ def _on_telegram_connect(application, adapter):
     from telegram.ext import CallbackQueryHandler
     # Group -1: ahead of the core's catch-all callback handler, which would take the button otherwise.
     application.add_handler(CallbackQueryHandler(_on_banner_button, pattern=f"^{engine.BANNER_LEAVE}"), group=-1)
+    application.add_handler(CallbackQueryHandler(_on_run_button, pattern=f"^{runner.PREFIX}"), group=-1)
 
 
 async def _on_banner_button(update, _context):
@@ -140,6 +141,47 @@ async def _on_banner_button(update, _context):
                 await query.message.delete()
             except Exception:
                 logger.debug("alternative-agents: stale banner not deleted", exc_info=True)
+    raise ApplicationHandlerStop
+
+
+async def _on_run_button(update, _context):
+    """A code block's run button: the first press asks to confirm, the second runs the script here."""
+    from contextlib import suppress
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import ApplicationHandlerStop
+    query = update.callback_query
+    data = query.data or ""
+    chat = getattr(getattr(query.message, "chat", None), "id", None)
+    if str(chat) != engine.TARGET_CHAT:
+        with suppress(Exception):
+            await query.answer()
+        raise ApplicationHandlerStop
+    base = (query.message.text or "▶️ Script").split(" — ", 1)[0]
+    try:
+        if data.startswith(runner.ASK):
+            sid = data[len(runner.ASK):]
+            buttons = [InlineKeyboardButton("✅ Yes, run it", callback_data=runner.GO + sid),
+                       InlineKeyboardButton("✖️ No", callback_data=runner.CANCEL + sid)]
+            await query.answer()
+            await query.edit_message_reply_markup(InlineKeyboardMarkup([buttons]))
+        elif data.startswith(runner.CANCEL):
+            await asyncio.to_thread(runner.drop, data[len(runner.CANCEL):])
+            await query.answer("Cancelled")
+            with suppress(Exception):
+                await query.edit_message_text(f"{base} — ✖️ cancelled")
+        elif data.startswith(runner.GO):
+            await query.answer("Running…")
+            with suppress(Exception):
+                await query.edit_message_text(f"{base} — ⏳ running…")
+            ok, output = await runner.run(data[len(runner.GO):])
+            with suppress(Exception):
+                await query.edit_message_text(f"{base} — {'✅ ran' if ok else '⚠️ failed'}")
+            await engine.say(output, reply_to=query.message.message_id)
+    except Exception:
+        logger.exception("alternative-agents: run button failed")
+        with suppress(Exception):
+            await query.answer("Failed")
     raise ApplicationHandlerStop
 
 

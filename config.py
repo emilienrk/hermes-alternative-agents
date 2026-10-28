@@ -32,8 +32,9 @@ DEFAULTS = {
     # a turn stops at either (0: no limit)
     "opencode_max_actions": 30,
     "opencode_max_cost_usd": 0.05,
-    # /<preset>: {name: {backend, banner, description, bare}}, the prompts being files (presets.py)
+    # /<preset>: {name: {backend, banner, description, bare, run_button}}, prompts being files (presets.py)
     "presets": {},
+    "run_timeout_seconds": 120,  # a run-button script is killed after this long
     # display
     "react_working": "👀",
     "react_queued": "✍",

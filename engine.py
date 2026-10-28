@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from . import presets, workspace
+from . import presets, runner, workspace
 from .config import cfg
 from .state import is_message
 
@@ -416,6 +416,8 @@ class Agent:
         if verbose and run.status_msg:
             await _edit(run.status_msg, self._summary(run))
         await self.deliver(body, attachments, anchor)
+        if private and presets.settings(private)["run_button"] and not run.failed() and run.result:
+            await self._offer_scripts(body, anchor)
         if self._speaks(state, jobs) and not run.failed() and run.result:
             await self._speak(_spoken_text(run.result.get("response") or ""), anchor)
         # A preset's conversation leaves no text behind: no message, answer or conversation id.
@@ -678,6 +680,27 @@ class Agent:
                 ids += await self.send(f"⚠️ Cannot send {p.name}: {error or '?'}", reply_to=reply_to, side=side)
         self._remember(ids, side)
         return ids
+
+    async def _offer_scripts(self, text, reply_to):
+        """A "run" button under each code block of the answer (the preset turned run buttons on)."""
+        bot = getattr(adapter(), "_bot", None)  # the adapter has no inline-keyboard API
+        blocks = runner.blocks(text)
+        if bot is None or not blocks:
+            return
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        single = len(blocks) == 1
+        for i, (lang, ext, code) in enumerate(blocks, 1):
+            sid = await asyncio.to_thread(runner.save, code, ext)
+            label = f"▶️ Run{'' if single else f' script {i}'} ({lang})"
+            button = InlineKeyboardButton(label, callback_data=runner.ASK + sid)
+            try:
+                await bot.send_message(chat_id=int(TARGET_CHAT),
+                                       text=f"{label} — {code.count(chr(10)) + 1} lines",
+                                       reply_to_message_id=int(reply_to) if reply_to else None,
+                                       reply_markup=InlineKeyboardMarkup([[button]]))
+            except Exception:
+                logger.exception("alternative-agents: cannot offer a run button")
+                await asyncio.to_thread(runner.drop, sid)
 
     def _remember(self, ids, side=False):
         self.store.remember_messages(ids, key="btw_msgs" if side else "msgs")

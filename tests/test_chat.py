@@ -38,6 +38,7 @@ workspace = sys.modules["alt_agents_under_test.workspace"]
 config = sys.modules["alt_agents_under_test.config"]
 backends = sys.modules["alt_agents_under_test.backends"]
 presets = sys.modules["alt_agents_under_test.presets"]
+runner = sys.modules["alt_agents_under_test.runner"]
 state = sys.modules["alt_agents_under_test.state"]
 tasks = importlib.import_module("alt_agents_under_test.tasks")
 # Never the real plugin data: an agent built during a test (plugin.register() rebuilds them all) gets
@@ -1577,6 +1578,98 @@ class AgentTests(Base):
         call = self.calls()[0]
         self.assertIn("unattended", call["prompt"])
         self.assertEqual(call["env"]["DEEPSEEK_API_KEY"], "sk-test")
+
+
+class RunButtonTests(Base):
+    PRESET = {"backend": "oc", "bare": True, "run_button": True}
+
+    def fake_query(self, data, text, chat=CHAT, message_id=900):
+        edited = {}
+
+        async def answer(msg=None):
+            edited["answer"] = msg
+
+        async def edit_text(t):
+            edited["text"] = t
+
+        async def edit_markup(m):
+            edited["markup"] = m
+
+        query = SimpleNamespace(data=data, answer=answer, edit_message_text=edit_text,
+                                edit_message_reply_markup=edit_markup,
+                                message=SimpleNamespace(chat=SimpleNamespace(id=int(chat)), message_id=message_id,
+                                                        text=text))
+        return SimpleNamespace(callback_query=query), edited
+
+    def test_blocks(self):
+        text = "intro\n```python\nprint(1)\n```\nmid\n```bash\necho hi\n```\n```text\nnope\n```"
+        self.assertEqual([(lang, ext) for lang, ext, _ in runner.blocks(text)], [("python", "py"), ("bash", "sh")])
+        self.assertEqual(runner.blocks("no code here, just ``inline``"), [])
+
+    async def test_offer_confirm_and_run(self):
+        from telegram.ext import ApplicationHandlerStop
+        await self.oc._offer_scripts("Voici:\n```python\nprint('hi')\n```", "42")
+        _kind, text, markup = self.adapter.sent("bot_send")[-1]
+        self.assertIn("Run (python)", text)
+        sid = markup.inline_keyboard[0][0].callback_data[len(runner.ASK):]
+        self.assertTrue((runner._dir() / f"{sid}.py").exists())
+
+        update, edited = self.fake_query(runner.ASK + sid, text)
+        with self.assertRaises(ApplicationHandlerStop):
+            await plugin._on_run_button(update, None)
+        self.assertEqual([b.text for b in edited["markup"].inline_keyboard[0]], ["✅ Yes, run it", "✖️ No"])
+        go = edited["markup"].inline_keyboard[0][0].callback_data
+        self.assertEqual(go, runner.GO + sid)
+
+        update, edited = self.fake_query(go, text)
+        with self.assertRaises(ApplicationHandlerStop):
+            await plugin._on_run_button(update, None)
+        self.assertIn("✅ ran", edited["text"])
+        self.assertIn("hi", self.adapter.sent()[-1][1])
+        self.assertFalse((runner._dir() / f"{sid}.py").exists())  # one-shot
+
+    async def test_cancel_drops_the_script(self):
+        from telegram.ext import ApplicationHandlerStop
+        await self.oc._offer_scripts("```python\nprint('x')\n```", "42")
+        _kind, _text, markup = self.adapter.sent("bot_send")[-1]
+        sid = markup.inline_keyboard[0][0].callback_data[len(runner.ASK):]
+        update, edited = self.fake_query(runner.CANCEL + sid, "▶️ Run (python) — 1 lines")
+        with self.assertRaises(ApplicationHandlerStop):
+            await plugin._on_run_button(update, None)
+        self.assertIn("cancelled", edited["text"])
+        self.assertFalse((runner._dir() / f"{sid}.py").exists())
+
+    async def test_wrong_chat_runs_nothing(self):
+        from telegram.ext import ApplicationHandlerStop
+        await self.oc._offer_scripts("```python\nprint('x')\n```", "42")
+        _kind, _text, markup = self.adapter.sent("bot_send")[-1]
+        sid = markup.inline_keyboard[0][0].callback_data[len(runner.ASK):]
+        update, edited = self.fake_query(runner.GO + sid, "x", chat="999")
+        with self.assertRaises(ApplicationHandlerStop):
+            await plugin._on_run_button(update, None)
+        self.assertNotIn("text", edited)
+        self.assertTrue((runner._dir() / f"{sid}.py").exists())
+
+    async def test_gone_script_says_so(self):
+        from telegram.ext import ApplicationHandlerStop
+        update, _edited = self.fake_query(runner.GO + "deadbeefdead", "x")
+        with self.assertRaises(ApplicationHandlerStop):
+            await plugin._on_run_button(update, None)
+        self.assertIn("no longer available", self.adapter.sent()[-1][1])
+
+    async def test_button_only_when_the_preset_enables_it(self):
+        self.assertFalse(presets.settings("none")["run_button"])
+        presets.save("mouse", "```python\nprint('ok')\n```")
+        config.cfg["presets"] = {"mouse": {**self.PRESET, "run_button": False}}
+        await self.dispatch(event("/mouse", msg_id="10"))
+        await self.finish(agent=self.oc)
+        self.assertEqual([c for c in self.adapter.sent("bot_send") if "Run (" in c[1]], [])
+        await plugin._cmd_off(self.oc, "")
+
+        config.cfg["presets"] = {"mouse": self.PRESET}
+        await self.dispatch(event("/mouse", msg_id="11"))
+        await self.finish(agent=self.oc)
+        self.assertEqual(len([c for c in self.adapter.sent("bot_send") if "Run (python)" in c[1]]), 1)
 
 
 class WorkspaceTests(Base):

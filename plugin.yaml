@@ -119,8 +119,14 @@ config_schema:
     default: {}
     description: >
       Optional settings of the presets (/<name>, prompts saved with /preset):
-      {name: {backend: opencode | agy | claude, banner: "…", description: "…", bare: true}}. Default backend:
-      opencode. bare (opencode only, default true): the conversation holds the prompt and your messages, nothing else.
+      {name: {backend: opencode | agy | claude, banner: "…", description: "…", bare: true, run_button: false}}.
+      Default backend: opencode. bare (opencode only, default true): the conversation holds the prompt and your
+      messages, nothing else. run_button (default false): a button under each code block of the agent's answer
+      runs that script on this machine, after a confirmation, and sends its output back.
+  run_timeout_seconds:
+    type: int
+    default: 120
+    description: A run-button script is stopped after this many seconds.
   machine_notes:
     type: str
     default: ""

@@ -186,7 +186,19 @@ Optional settings, per preset:
 presets:
   reviewer: {backend: claude, banner: "🔍 Code review mode", description: "Review the current branch"}
   tutor: {bare: false}  # opencode with its tools and Hermes' context
+  scripter: {run_button: true}  # a "run" button under the agent's code blocks
 ```
+
+### Run buttons
+
+A preset with `run_button: true` puts a **▶️ Run** button under each code block (Python or shell)
+the agent writes. A bare agent has no tools, so it can only propose code, not act; the button lets you
+run it on this machine from Telegram, without SSH. One press asks to confirm, the second runs the
+script as the gateway's user and sends its output back. A script is stopped after `run_timeout_seconds`
+(120 by default). The code is the answer you already see; it is saved only between the button and the
+press, deleted as soon as it runs, and pruned after an hour. This is not a sandbox: whoever can press
+the button could already message the agent, and the script runs with that user's full rights — leave it
+off (the default) unless you want one-press execution, above all for a plugin shared with others.
 
 ## Scheduled tasks
 
