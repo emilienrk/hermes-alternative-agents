@@ -50,6 +50,20 @@ def main():
     if mode == "crash":
         print("panic: something broke", flush=True)
         sys.exit(2)
+    if mode in ("thought", "thought_glued") and "internal reasoning" not in prompt:
+        # Gemini's reasoning in the answer: its own step, then the answer (thought), or both in one.
+        leak = "thought\nLet's analyze the audio.\n"
+        steps = [leak, "Voici la réponse."] if mode == "thought" else [leak + "Voici la réponse collée."]
+        for i, text in enumerate(steps, 1):
+            emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": i, "state": "DONE",
+                                                          "step_type": "agent_response", "text_delta": text}})
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
+                                            "response": "".join(steps)}})
+        return
+    if mode == "thought_glued":
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
+                                            "response": "Voici la réponse seule."}})
+        return
     emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": 1, "state": "DONE",
                                                   "step_type": "agent_response", "text_delta": "Looking.\n"}})
     emit({"event": "step_update", "step_update": {

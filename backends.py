@@ -92,6 +92,10 @@ class Backend:
         """Why the running turn must stop now (a spending limit reached), or ""; checked at each event."""
         return ""
 
+    def leaked(self, run):
+        """True when the answer holds the model's reasoning and the agent must be asked for it alone."""
+        return False
+
     def _with_context(self, run, message, conv):
         """The message after the context block; blocking (reads Hermes' state)."""
         state = self.store.load()
@@ -128,6 +132,13 @@ class Agy(Backend):
     # Two agy processes sharing the OAuth token (e.g. another account on the machine): a
     # simultaneous refresh fails one of them once.
     _TRANSIENT = re.compile(r"not logged into Antigravity|INTERNAL \(code 500\)", re.I)
+    # Gemini sometimes writes its reasoning into the answer itself, opened by a "thought" line, mostly
+    # when it hears audio (measured 2026-11-15: 10 of 86 turns with a file since 2026-10-29); agy then
+    # stores that step without its thinking field. Such a step goes; when the answer is in it, agy is
+    # asked for the answer alone.
+    _THOUGHT = re.compile(r"^\s*thought\s*\n", re.I)
+    LEAK_RETRY = ("Your last message showed {user} your internal reasoning (it began with \"thought\"). "
+                  "Send {user} only your final answer, as you meant it, and nothing else.")
     _QUOTA = re.compile(r"RESOURCE_EXHAUSTED|quota|rate.?limit|code 429", re.I)
     _WINDOWS = {"weekly": "week", "5h": "5 h"}
 
@@ -174,6 +185,13 @@ class Agy(Backend):
             if (run.result.get("status") == "ERROR" and (run.result.get("response") or "").strip()
                     and self._BLOCKED.search(str(run.result.get("error") or ""))):
                 run.result["status"] = "SUCCESS"  # the answer came out: the block was retried
+            if self._THOUGHT.match(run.result.get("response") or ""):
+                steps = [run.text[i] for i in sorted(run.text) if run.text[i].strip()]
+                if steps and not self._THOUGHT.match(steps[-1]):
+                    run.result["response"] = "\n\n".join(s.strip() for s in steps if not self._THOUGHT.match(s))
+
+    def leaked(self, run):
+        return bool(run.result) and bool(self._THOUGHT.match(run.result.get("response") or ""))
 
     def _track_step(self, run, step):
         kind, status = step.get("step_type"), step.get("state")

@@ -405,6 +405,10 @@ class Agent:
                 await asyncio.sleep(5)
                 run.reset()
                 await self._exec(run, prompt, store.load().get("conversation_id"))
+            if not run.failed() and backend.leaked(run):
+                run.reset()
+                await self._exec(run, backend.LEAK_RETRY.format(user=workspace.USER),
+                                 store.load().get("conversation_id"))
         finally:
             for task in side_tasks:
                 task.cancel()

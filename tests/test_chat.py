@@ -388,6 +388,26 @@ class TurnTests(Base):
         self.assertTrue(self.adapter.sent()[-1][1].startswith("OK"))
         self.assertEqual(self.agy.store.load()["conversation_id"], "old-conv")
 
+    async def test_reasoning_in_its_own_step_is_dropped(self):
+        self.mode("thought")
+        await self.dispatch(event("/agy question", msg_id="1"))
+        await self.finish()
+        self.assertEqual(len(self.calls()), 1)
+        reply = self.adapter.sent()[-1][1]
+        self.assertTrue(reply.startswith("Voici la réponse."), reply)
+        self.assertNotIn("analyze", reply)
+
+    async def test_reasoning_glued_to_the_answer_asks_again(self):
+        self.mode("thought_glued")
+        await self.dispatch(event("/agy question", msg_id="1"))
+        await self.finish()
+        first, again = self.calls()
+        self.assertIn("internal reasoning", again["prompt"])
+        self.assertEqual(again["conversation"], self.agy.store.load()["conversation_id"])
+        reply = self.adapter.sent()[-1][1]
+        self.assertTrue(reply.startswith("Voici la réponse seule."), reply)
+        self.assertNotIn("thought", reply)
+
     async def test_crash_reports_error_and_retry_works(self):
         self.mode("crash")
         await self.dispatch(event("/agy plante", msg_id="1"))
