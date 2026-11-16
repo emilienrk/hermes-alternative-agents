@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 INLINE_DOC_MAX_BYTES = 100 * 1024
 _SLASH = re.compile(r"^/([A-Za-z0-9_-]+)(?:@\w+)?(?=\s|$)")
 _HERMES_WORD = re.compile(r"^\s*herm[eè]s(?=$|[\s,:;.!?])", re.I)
+# The note Hermes' Telegram adapter puts in place of an attachment it couldn't download.
+_LOST_MEDIA = re.compile(r"\s*\[The user attempted to send an? [^\]]*could not be downloaded[^\]]*\]")
+VOICE_RETRY_DELAYS_S = (2, 5, 10)
 
 HANDOFF_THREAD_MESSAGES = 30
 HANDBACK_TURNS = 8
@@ -198,6 +201,7 @@ async def _on_dispatch(event=None, gateway=None, **_kwargs):
             return None
         if gateway is not None:
             engine.bind_gateway(gateway)
+        await _recover_voice(event)
         decision = route(event, {name: agent.store.load() for name, agent in engine.AGENTS.items()})
         if decision is None:
             return None
@@ -205,6 +209,36 @@ async def _on_dispatch(event=None, gateway=None, **_kwargs):
     except Exception:
         logger.exception("alternative-agents: dispatch failed")
         return None
+
+
+async def _recover_voice(event):
+    """Download again a voice note Hermes gave up on. Hermes tries once, and right after its link to Telegram
+    comes back a download can still time out (measured 2026-11-16: two voice notes lost that way); the
+    message then holds a note instead of the audio."""
+    kind = getattr(getattr(event, "message_type", None), "value", "")
+    if kind not in ("voice", "audio") or getattr(event, "media_urls", None) or not _LOST_MEDIA.search(event.text or ""):
+        return
+    source = getattr(getattr(event, "raw_message", None), kind, None)
+    if source is None:
+        return
+    for delay in VOICE_RETRY_DELAYS_S:
+        await asyncio.sleep(delay)
+        try:
+            file_obj = await source.get_file(read_timeout=60)
+            data = await file_obj.download_as_bytearray(read_timeout=60)
+            path = await _cache_audio(bytes(data), ".ogg" if kind == "voice" else ".mp3")
+        except Exception as e:
+            logger.info("alternative-agents: voice download retry failed: %s", type(e).__name__)
+            continue
+        event.media_urls, event.media_types = [path], ["audio/ogg" if kind == "voice" else "audio/mp3"]
+        event.text = _LOST_MEDIA.sub("", event.text).strip()
+        await engine.say("🎙 Got your voice note after all: no need to send it again.", event.message_id)
+        return
+
+
+async def _cache_audio(data, ext):
+    from gateway.platforms.base import cache_audio_from_bytes_async
+    return await cache_audio_from_bytes_async(data, ext=ext)
 
 
 def route(event, states):

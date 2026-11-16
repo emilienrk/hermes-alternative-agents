@@ -463,6 +463,50 @@ class TurnTests(Base):
         attached = self.adapter.sent("document")[0][1]
         self.assertGreater(len(Path(attached).read_text()), 15000)
 
+    def lost_voice(self, fails):
+        """A voice note Hermes couldn't download: its note in the text, the Telegram message kept."""
+        tries = []
+
+        async def download_as_bytearray(read_timeout=None):
+            return bytearray(b"ogg")
+
+        async def get_file(read_timeout=None):
+            tries.append(1)
+            if len(tries) <= fails:
+                raise TimeoutError("Timed out")
+            return SimpleNamespace(download_as_bytearray=download_as_bytearray)
+        ev = event("[The user attempted to send a voice message but it could not be downloaded (TimedOut); they "
+                   "have been asked to retry.]", mtype="voice", msg_id="3")
+        ev.raw_message = SimpleNamespace(voice=SimpleNamespace(get_file=get_file))
+        return ev, tries
+
+    async def test_lost_voice_note_downloaded_again(self):
+        self.agy.store.update(sticky=True)
+        saved = plugin.VOICE_RETRY_DELAYS_S, plugin._cache_audio
+        voice = self.tmp / "again.ogg"
+
+        async def cache(data, ext):
+            voice.write_bytes(data)
+            return str(voice)
+        plugin.VOICE_RETRY_DELAYS_S, plugin._cache_audio = (0, 0, 0), cache
+        try:
+            ev, tries = self.lost_voice(fails=1)
+            await self.dispatch(ev)
+            await self.finish()
+            self.assertEqual(len(tries), 2)
+            prompt = self.calls()[0]["prompt"]
+            self.assertIn("-again.ogg (audio/ogg)", prompt)
+            self.assertNotIn("could not be downloaded", prompt)
+            self.assertIn("no need to send it again", self.adapter.sent()[0][1])
+
+            ev, tries = self.lost_voice(fails=3)  # still unreachable: the note goes on, as before
+            await self.dispatch(ev)
+            await self.finish()
+            self.assertEqual(len(tries), 3)
+            self.assertIn("could not be downloaded", self.calls()[1]["prompt"])
+        finally:
+            plugin.VOICE_RETRY_DELAYS_S, plugin._cache_audio = saved
+
     async def test_voice_note_in_sticky_mode(self):
         self.agy.store.update(sticky=True)
         voice = self.tmp / "v.ogg"
