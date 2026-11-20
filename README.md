@@ -274,6 +274,7 @@ Under `plugins.entries.alternative-agents.settings` in `config.yaml` (also edita
 | `workspace` | `~/agy-chat` | agy's working directory: `inbox/` (your files), `out/` (its files), `.agents/` (generated). |
 | `default_model` | `gemini-3.8-flash-high` | Model until `/agy_model` picks another. |
 | `mark` | `🛸` | Emoji in agy's footer, status and banner (`""` for none). |
+| `agy_compact_tokens` | `400000` | After a turn whose prompt passed this many tokens, the conversation is compacted (agy's `/compact`); a saturated one is compacted before being replaced (`0`: never after a turn). |
 | **Claude Code** | | |
 | `claude_path` | `claude` on `PATH`, else `~/.local/bin/claude` | The Claude Code CLI. |
 | `claude_workspace` | `~/claude-chat` | Claude Code's working directory: `inbox/`, `out/`, `.hermes/` (generated). |

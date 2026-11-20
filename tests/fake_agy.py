@@ -34,10 +34,38 @@ def main():
     conv = args[args.index("--conversation") + 1] if "--conversation" in args else None
     with (HERE / "calls.jsonl").open("a") as f:
         f.write(json.dumps({"args": args, "prompt": prompt, "conversation": conv}) + "\n")
+    earlier = [json.loads(line)["prompt"] for line in (HERE / "calls.jsonl").read_text().splitlines()][:-1]
     cid = conv or str(uuid.uuid4())
     emit({"event": "init", "conversation_id": cid, "init": {"model": "x", "cwd": str(Path.cwd())}})
     emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": 0, "state": "DONE",
                                                   "step_type": "user_input"}})
+    capacity = "API error (attempt 1): UNAVAILABLE (code 503): No capacity available for model x on the server"
+    if prompt == "/compact":
+        if mode == "saturated":
+            emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR",
+                                                "error": "API error (attempt 1): UNAVAILABLE (code 503)"}})
+            return
+        emit({"event": "step_update", "step_update": {
+            "conversation_id": cid, "step_index": 1, "state": "DONE", "step_type": "checkpoint",
+            "usage": {"input_tokens": 60000, "cache_read_tokens": 0}}})
+        emit({"event": "step_update", "step_update": {
+            "conversation_id": cid, "step_index": 2, "state": "DONE", "step_type": "agent_response",
+            "text_delta": "\n", "usage": {"input_tokens": 9000, "cache_read_tokens": 0}}})
+        # agy reports a compaction alone as failed with the conversation's last error
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR", "response": "",
+                                            "error": capacity}})
+        return
+    if mode == "capacity" and conv and not earlier:
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR", "error": capacity}})
+        return
+    if mode == "capacity_stale" and conv:
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR", "response": "OK\n",
+                                            "error": capacity}})
+        return
+    if mode == "saturated_compactable" and conv and "/compact" not in earlier:
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR",
+                                            "error": "API error (attempt 1): UNAVAILABLE (code 503)"}})
+        return
     if mode == "saturated" and conv:
         emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR",
                                             "error": "API error (attempt 1): UNAVAILABLE (code 503)"}})
@@ -64,8 +92,10 @@ def main():
         emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
                                             "response": "Voici la réponse seule."}})
         return
+    size = 450000 if mode == "big" else 20000
     emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": 1, "state": "DONE",
-                                                  "step_type": "agent_response", "text_delta": "Looking.\n"}})
+                                                  "step_type": "agent_response", "text_delta": "Looking.\n",
+                                                  "usage": {"input_tokens": size // 3, "cache_read_tokens": size - size // 3}}})
     emit({"event": "step_update", "step_update": {
         "conversation_id": cid, "step_index": 2, "state": "ACTIVE", "step_type": "tool", "tool_name": "run_command",
         "tool_info": {"name": "run_command", "parameters": {"CommandLine": f"ls {Path.home()}/projects"}}}})

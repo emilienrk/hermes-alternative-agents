@@ -128,7 +128,7 @@ class Store:
         convs, opened_by_preset = {}, set()
         for order, turn in enumerate(self.recent_turns()):
             cid = turn.get("conversation_id")
-            if not cid or turn.get("btw"):
+            if not cid or turn.get("btw") or turn.get("compact"):
                 continue
             if turn.get("preset"):
                 opened_by_preset.add(cid)

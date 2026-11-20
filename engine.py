@@ -40,6 +40,7 @@ SUMMARY_MAX_LINES = 12
 STATUS_ACTIONS = 5
 INBOX_KEEP_DAYS = 30
 RECAP_TURNS = 6
+TRANSIENT_RETRY_S = 5
 BTW_RECAP_TURNS = 4
 BTW_HEAD = ("Side question (\"btw\"): {user} asks this alongside the main conversation, which another {agent} "
             "may be working on right now: don't touch its work in progress. Recent exchanges of the main "
@@ -101,6 +102,8 @@ class Run:
         self.tokens = 0
         self.cost = 0.0
         self.rate_limit = None
+        self.context_tokens = 0  # the conversation's size at the last model call (backend.compact_at)
+        self.compacted = False
 
     def error_text(self):
         if self.result is not None:
@@ -394,7 +397,12 @@ class Agent:
         notice = ""
         try:
             await self._exec(run, prompt, conv)
-            if run.failed() and conv and not bare and backend.restart_fresh(run.error_text()):
+            saturated = run.failed() and conv and not bare and backend.restart_fresh(run.error_text())
+            if saturated and await self._compact(conv, run):
+                run.reset()
+                await self._exec(run, prompt, conv)
+                saturated = run.failed() and backend.restart_fresh(run.error_text())
+            if saturated:
                 notice = f"♻️ {backend.restart_notice}: new conversation, seeded with the recent thread."
                 store.update(conversation_id=None)
                 recap = store.recap(conv, RECAP_TURNS, workspace.USER, self.label)
@@ -402,7 +410,7 @@ class Agent:
                 run.reset()
                 await self._exec(run, await asyncio.to_thread(backend.prompt, run, seeded, None), None)
             elif run.failed() and backend.transient(run.error_text()):
-                await asyncio.sleep(5)
+                await asyncio.sleep(TRANSIENT_RETRY_S)
                 run.reset()
                 await self._exec(run, prompt, store.load().get("conversation_id"))
             if not run.failed() and backend.leaked(run):
@@ -436,6 +444,28 @@ class Agent:
             **({"cost_usd": run.cost} if run.cost else {}), **({"limit": run.limited} if run.limited else {})})
         if private and not store.load().get("preset"):
             store.update(conversation_id=None)  # the preset's mode was left during the turn: that conversation is over
+        elif not private and not bare and not run.failed() and run.context_tokens >= backend.compact_at > 0:
+            await self._compact(store.load().get("conversation_id"), run)
+
+    async def _compact(self, conv, turn):
+        """Have the agent summarize conversation ``conv`` in place, as part of ``turn``; True once done."""
+        if not self.backend.compact_prompt or not conv or turn.stopped:
+            return False
+        run = self.run = Run([], turn.model, turn.effort, side=True)  # side: the state's conversation stays
+        try:
+            await self._exec(run, self.backend.compact_prompt, conv)
+        finally:
+            self.run = turn
+            turn.stopped = turn.stopped or run.stopped  # /stop reached the compaction
+        logger.info("alternative-agents: %s conversation %s compacted: %s (%d tokens before, %d after)",
+                    self.backend.name, conv, run.compacted, turn.context_tokens, run.context_tokens)
+        await asyncio.to_thread(self.store.log_turn, {
+            "model": run.model, "conversation_id": conv, "compact": True,
+            "status": "SUCCESS" if run.compacted else "STOPPED" if run.stopped
+            else (run.result or {}).get("status", "NO_RESULT"),
+            "seconds": int(time.time() - run.started), "tokens": run.tokens,
+            "context": [turn.context_tokens, run.context_tokens]})
+        return run.compacted
 
     async def _compose(self, jobs, verbose, bare=False):
         """The message the agent receives, and the attachments copied to its inbox."""

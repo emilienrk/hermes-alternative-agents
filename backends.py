@@ -50,6 +50,8 @@ class Backend:
     can_bare = False  # a preset's conversation can hold its prompt and the user's messages only
     restart_notice = ""
     default_mark = ""
+    compact_prompt = ""  # the message that makes the agent summarize its conversation ("" if it can't)
+    compact_at = 0  # tokens: past this size after a turn, the conversation is compacted (0: never)
 
     def __init__(self):
         self.store = Store(self.name, self.default_model)
@@ -115,6 +117,7 @@ class Agy(Backend):
     default_model = "gemini-3.8-flash-high"
     default_mark = "🛸"
     restart_notice = "Conversation saturated (503)"
+    compact_prompt = "/compact"
     MODELS_TTL_S = 3600
     STORE = Path.home() / ".gemini/antigravity-cli"
     TOKEN_FILE = STORE / "antigravity-oauth-token"
@@ -125,6 +128,10 @@ class Agy(Backend):
     # A long conversation ends in a permanent 503 on every model, while a fresh one answers
     # (measured 2026-10-01).
     _SATURATED = re.compile(r"UNAVAILABLE|code 503")
+    # Google out of capacity for a model is a 503 too, unrelated to the conversation: a fresh one fails
+    # the same. agy then also reports the turns after it as failed with that error, the answer included
+    # (measured 2026-11-19: 66 such errors in an afternoon, each one restarting the conversation).
+    _CAPACITY = re.compile(r"No capacity available", re.I)
     # Once Google's output filter has blocked one answer of a conversation (agy then retries), agy
     # reports every later turn of it as failed with that error, the answer included (measured
     # 2026-10-27: a conversation stuck that way answered "OK" with status ERROR).
@@ -150,6 +157,7 @@ class Agy(Backend):
         super().configure()
         self.bin = self._find_bin(cfg["agy_path"], Path.home() / ".local/bin/agy")
         self.mark = str(cfg["mark"] or "")
+        self.compact_at = cfg["agy_compact_tokens"]
         self.store.default_model = cfg["default_model"] or self.default_model
         self.workspace = workspace.AgyWorkspace(self, cfg["workspace"] or "~/agy-chat")
 
@@ -182,9 +190,10 @@ class Agy(Backend):
         elif kind == "result":
             run.result = dict(event.get("result") or {})
             run.tokens = int(((run.result.get("usage") or {}).get("total_tokens")) or 0)
+            error = str(run.result.get("error") or "")
             if (run.result.get("status") == "ERROR" and (run.result.get("response") or "").strip()
-                    and self._BLOCKED.search(str(run.result.get("error") or ""))):
-                run.result["status"] = "SUCCESS"  # the answer came out: the block was retried
+                    and (self._BLOCKED.search(error) or self._CAPACITY.search(error))):
+                run.result["status"] = "SUCCESS"  # the answer came out: the error was retried
             if self._THOUGHT.match(run.result.get("response") or ""):
                 steps = [run.text[i] for i in sorted(run.text) if run.text[i].strip()]
                 if steps and not self._THOUGHT.match(steps[-1]):
@@ -195,6 +204,11 @@ class Agy(Backend):
 
     def _track_step(self, run, step):
         kind, status = step.get("step_type"), step.get("state")
+        usage = step.get("usage") or {}
+        if usage:  # the prompt of that model call: the conversation's current size
+            run.context_tokens = int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_tokens") or 0)
+        if kind == "checkpoint" and status == "DONE":
+            run.compacted = True
         if kind == "tool":
             info = step.get("tool_info") or {}
             desc = _describe(info.get("name") or step.get("tool_name"), info.get("parameters") or {}, _PARAM_KEYS)
@@ -211,10 +225,10 @@ class Agy(Backend):
             run.changed = True
 
     def restart_fresh(self, error):
-        return bool(self._SATURATED.search(error))
+        return bool(self._SATURATED.search(error)) and not self._CAPACITY.search(error)
 
     def transient(self, error):
-        return bool(self._TRANSIENT.search(error))
+        return bool(self._TRANSIENT.search(error) or self._CAPACITY.search(error))
 
     def forget(self, conversation_id):
         # conversations/<id>.db, brain/<id>/, annotations/<id>.pbtxt, presence/<id>.lock
@@ -223,6 +237,8 @@ class Agy(Backend):
     def hint(self, error):
         if self._QUOTA.search(error):
             return "Quota reached on this model? /agy_model to switch."
+        if self._CAPACITY.search(error):
+            return "Google is out of capacity for this model: /agy_retry later, or /agy_model to switch."
         if self._SATURATED.search(error):
             return "Conversation too heavy? /agy_new then /agy_retry."
         if self._TRANSIENT.search(error):

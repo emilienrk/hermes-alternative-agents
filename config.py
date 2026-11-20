@@ -16,6 +16,7 @@ DEFAULTS = {
     "workspace": "~/agy-chat",
     "default_model": "",
     "mark": "🛸",
+    "agy_compact_tokens": 400_000,  # the conversation is compacted after a turn past this size (0: never)
     # Claude Code
     "claude_path": "",
     "claude_workspace": "~/claude-chat",
@@ -73,7 +74,7 @@ def load(get):
         cfg["timeout_minutes"] = max(1, int(cfg["timeout_minutes"]))
     except (TypeError, ValueError):
         cfg["timeout_minutes"] = DEFAULTS["timeout_minutes"]
-    for key, kind in (("opencode_max_actions", int), ("opencode_max_cost_usd", float)):
+    for key, kind in (("opencode_max_actions", int), ("opencode_max_cost_usd", float), ("agy_compact_tokens", int)):
         try:
             cfg[key] = max(0, kind(cfg[key]))
         except (TypeError, ValueError):

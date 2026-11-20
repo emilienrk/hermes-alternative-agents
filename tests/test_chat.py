@@ -371,13 +371,64 @@ class TurnTests(Base):
         self.mode("saturated")
         await self.dispatch(event("/agy continue", msg_id="1"))
         await self.finish()
-        calls = self.calls()
-        self.assertEqual([c["conversation"] for c in calls], ["old-conv", None])
-        self.assertIn("earlier answer", calls[1]["prompt"])
+        calls = self.calls()  # the compaction failed too
+        self.assertEqual([(c["conversation"], c["prompt"]) for c in calls][1], ("old-conv", "/compact"))
+        self.assertEqual([c["conversation"] for c in calls], ["old-conv", "old-conv", None])
+        self.assertIn("earlier answer", calls[2]["prompt"])
         reply = self.adapter.sent()[-1][1]
         self.assertIn("♻️", reply)
         self.assertIn("ECHO:", reply)
         self.assertNotEqual(store.load()["conversation_id"], "old-conv")
+
+    async def test_saturated_conversation_is_compacted_first(self):
+        store = self.agy.store
+        store.update(conversation_id="old-conv")
+        self.mode("saturated_compactable")
+        await self.dispatch(event("/agy continue", msg_id="1"))
+        await self.finish()
+        self.assertEqual([(c["conversation"], c["prompt"][-8:]) for c in self.calls()],
+                         [("old-conv", "continue"), ("old-conv", "/compact"), ("old-conv", "continue")])
+        reply = self.adapter.sent()[-1][1]
+        self.assertIn("ECHO:", reply)
+        self.assertNotIn("♻️", reply)
+        self.assertEqual(store.load()["conversation_id"], "old-conv")
+
+    async def test_no_capacity_retries_the_same_conversation(self):
+        self.agy.store.update(conversation_id="old-conv")
+        self.mode("capacity")
+        with mock.patch.object(engine, "TRANSIENT_RETRY_S", 0):
+            await self.dispatch(event("/agy continue", msg_id="1"))
+            await self.finish()
+        self.assertEqual([c["conversation"] for c in self.calls()], ["old-conv", "old-conv"])
+        self.assertIn("ECHO:", self.adapter.sent()[-1][1])
+        self.assertEqual(self.agy.store.load()["conversation_id"], "old-conv")
+
+    async def test_answer_despite_a_stale_capacity_error(self):
+        self.agy.store.update(conversation_id="old-conv")
+        self.mode("capacity_stale")
+        await self.dispatch(event("/agy continue", msg_id="1"))
+        await self.finish()
+        self.assertEqual(len(self.calls()), 1)
+        self.assertTrue(self.adapter.sent()[-1][1].startswith("OK"))
+
+    async def test_big_conversation_is_compacted_after_the_answer(self):
+        store = self.agy.store
+        await self.dispatch(event("/agy hello", msg_id="1"))
+        await self.finish()
+        self.assertEqual(len(self.calls()), 1)  # small: left as is
+        self.mode("big")
+        await self.dispatch(event("/agy more", msg_id="2"))
+        await self.finish()
+        conv = store.load()["conversation_id"]
+        self.assertEqual([(c["conversation"], c["prompt"]) for c in self.calls()][2], (conv, "/compact"))
+        self.assertIn("ECHO:", self.adapter.sent()[-1][1])
+        compact = [json.loads(line) for line in store.turns_log.read_text().splitlines()][-1]
+        self.assertEqual((compact["compact"], compact["status"], compact["context"]), (True, "SUCCESS", [450000, 9000]))
+        self.assertEqual(store.conversations()[0]["turns"], 2)
+        self.agy.backend.compact_at = 0
+        await self.dispatch(event("/agy again", msg_id="3"))
+        await self.finish()
+        self.assertEqual(len(self.calls()), 4)
 
     async def test_answer_despite_a_stale_content_filter_error(self):
         self.agy.store.update(conversation_id="old-conv")
